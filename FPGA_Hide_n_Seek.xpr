@@ -4,10 +4,10 @@
 <!-- Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.                   -->
 <!-- Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.   -->
 
-<Project Product="Vivado" Version="7" Minor="71" Path="C:/Users/shind/Desktop/NUS/Y2/S1/EE2026/Lab/FDP/Hide_n_Seek/Hide_n_Seek.xpr">
+<Project Product="Vivado" Version="7" Minor="71" Path="C:/Users/shind/Desktop/NUS/Y2/S1/EE2026/Lab/FDP/Hide_n_Seek/FPGA_Hide_n_Seek/FPGA_Hide_n_Seek.xpr">
   <DefaultLaunch Dir="$PRUNDIR"/>
   <Configuration>
-    <Option Name="Id" Val="c1e314dbdb204e37980eb41b55c1ff0d"/>
+    <Option Name="Id" Val="46e9dccec68146b9ba1990db88b716ec"/>
     <Option Name="Part" Val="xc7a35tcpg236-1"/>
     <Option Name="CompiledLibDir" Val="$PCACHEDIR/compile_simlib"/>
     <Option Name="CompiledLibDirXSim" Val=""/>
