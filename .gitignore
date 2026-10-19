@@ -1,0 +1,23 @@
+# Vivado auto-generated build directories and caches
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.gen/
+.Xil/
+
+# Logs and journal files
+*.log
+*.jou
+*.str
+
+# Synthesis and implementation outputs (bitstreams, hardware definitions)
+*.bit
+*.ltx
+*.mmi
+*.xsa
+
+# Operating System files
+.DS_Store
+Thumbs.db
