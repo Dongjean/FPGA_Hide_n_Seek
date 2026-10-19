@@ -61,8 +61,7 @@ function [4:0]wall_shade_for_distance (input [9:0]distance);
     end
 endfunction
 
-function [15:0]wall_colour;
-    input [4:0] red_brightness;
+function [15:0]wall_colour (input [4:0]red_brightness);
     begin
         // RGB565: 5 red bits, 6 green bits, 5 blue bits.
         wall_colour = {red_brightness, 6'd0, 5'd0};
