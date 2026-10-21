@@ -82,3 +82,78 @@ function map_is_wall (input [3:0]x, [3:0]y, [99:0]map_bits);
             map_is_wall = map_bits[7'd99 - (y * 7'd10) - x];
     end
 endfunction
+
+// Textures are 16x16 texels
+// Texel step LUT
+// Returns the current vertical texel coordinate based on the half height
+// The math is texel = pixel * 16 / wall_height
+// But this is a very small value, so scale it by 256 for better floating point accuracy
+// The code later will right shift the result by 8 to offset this (2^8 = 256)
+function [8:0]wall_tex_step (input [5:0]hh);
+    begin
+        case (hh)
+            6'd8:   wall_tex_step  = 9'd256;
+            6'd9:   wall_tex_step  = 9'd228;
+            6'd10:   wall_tex_step = 9'd205;
+            6'd11:   wall_tex_step = 9'd186;
+            6'd12:   wall_tex_step = 9'd171;
+            6'd13:   wall_tex_step = 9'd158;
+            6'd14:   wall_tex_step = 9'd146;
+            6'd15:   wall_tex_step = 9'd137;
+            6'd16:   wall_tex_step = 9'd128;
+            6'd17:   wall_tex_step = 9'd120;
+            6'd18:   wall_tex_step = 9'd114;
+            6'd19:   wall_tex_step = 9'd108;
+            6'd20:   wall_tex_step = 9'd102;
+            6'd21:   wall_tex_step = 9'd98;
+            6'd22:   wall_tex_step = 9'd93;
+            6'd23:   wall_tex_step = 9'd89;
+            6'd24:   wall_tex_step = 9'd85;
+            6'd25:   wall_tex_step = 9'd82;
+            6'd26:   wall_tex_step = 9'd79;
+            6'd27:   wall_tex_step = 9'd76;
+            6'd28:   wall_tex_step = 9'd73;
+            6'd29:   wall_tex_step = 9'd71;
+            default: wall_tex_step = 9'd68;   // hh >= 30 (clamped close wall)
+        endcase
+    end
+endfunction
+
+// Brick texture
+// Bricks are 8 texels wide and 4 texels tall (3 texels for brick, 1 texel for mortar row)
+// A "course" is a row of bricks. Odd courses are shifted by half a brick (4 texels) to the side, to let the pattern stagger
+function [15:0]wall_texture_colour;
+    input [3:0] u;
+    input [3:0] v;
+    input [4:0] shade;
+    input       ew;
+    reg [4:0] lit;
+    reg [3:0] u_off;
+    reg       seg;
+    reg [1:0] tone;
+    reg       mortar;
+    reg [4:0] r;
+    reg [5:0] g;
+    reg [4:0] b;
+    begin
+        lit   = ew ? (shade - (shade >> 2)) : shade;   // 75 % brightness
+        u_off = v[2] ? (u + 4'd4) : u;                  // Stagger odd courses
+        seg   = u_off[3];                               // Which brick in the row
+        mortar = (v[1:0] == 2'd0) || (u_off[2:0] == 3'd0);
+
+        if (mortar) begin
+            // Mid grey mortar (1/2 of the lit brightness)
+            r = (lit >> 1);
+            g = {r, 1'b0};
+            b = r;
+        end else begin
+            // Brick block
+            // Per-brick brightness variation (0..3 steps), pseudo-random by brick
+            tone = {v[3] ^ seg, v[2] ^ v[3] ^ seg};
+            r = lit - {3'd0, tone};
+            g = {2'd0, r[4:1]} + {3'd0, r[4:2]};
+            b = {2'd0, r[4:2]};
+        end
+        wall_texture_colour = {r, g, b};
+    end
+endfunction
