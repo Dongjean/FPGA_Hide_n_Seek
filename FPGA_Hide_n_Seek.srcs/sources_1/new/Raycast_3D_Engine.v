@@ -80,8 +80,7 @@ module Raycast_3D_Engine
     reg [3:0] tex_u_oriented;
 
     // Sequential fixed-point ray marcher
-    // Every time it reaches a wall, it
- stores one projected vertical slice in the buffer that is not displayed
+    // Every time it reaches a wall, it stores one projected vertical slice in the buffer that is not displayed
     always @(posedge clk) begin
     
         // Update the ray states
