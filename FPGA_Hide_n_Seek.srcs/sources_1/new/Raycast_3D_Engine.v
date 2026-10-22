@@ -81,7 +81,7 @@ module Raycast_3D_Engine
 
     // Sequential fixed-point ray marcher
     // Every time it reaches a wall, it
- stores one projected vertical slice in the buffer that is not displayed
+ //stores one projected vertical slice in the buffer that is not displayed
     always @(posedge clk) begin
     
         // Update the ray states
