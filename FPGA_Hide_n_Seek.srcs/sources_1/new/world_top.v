@@ -15,6 +15,8 @@
 //      load_y/load_dir into player_movement one cycle after the map is done,
 //      and again on every `respawn` pulse (e.g. the countdown "go" event).
 //   5. Gives a combinational cell-type read port for Toh's AI bot.
+//   6. opp_spawn_x/opp_spawn_y: the other player's corner, valid 1 cycle after
+//      start (before the maze is finished), for placing the AI bot.
 //
 // Spawn rule (option B, 10x10)
 //   Corners are fixed room cells, always on opposite corners of the maze:
@@ -77,6 +79,12 @@ module world_top
     output reg signed [15:0] opp_x,
     output reg signed [15:0] opp_y,
     output reg     [7:0]  opp_dir,
+
+    // ---- Spawn corner of the other player, valid from 1 cycle after start ----
+    // Does not wait for the maze (the corner depends only on the seed and roles),
+    // so the AI bot can be placed right when the match starts.
+    output signed  [15:0] opp_spawn_x,
+    output signed  [15:0] opp_spawn_y,
 
     // ---- Spawn cells (y*10 + x) for portal_ctrl / capsule_ctrl ----
     output         [6:0]  hider_cell,
@@ -227,6 +235,10 @@ module world_top
     function signed [15:0] centre (input [3:0] c);
         centre = {4'b0000, c, 8'h80};
     endfunction
+
+    // Early copy of the other player's corner (combinational from diag/swap/is_hider)
+    assign opp_spawn_x = centre(corner_x(opp_cell));
+    assign opp_spawn_y = centre(corner_y(opp_cell));
 
     // load_pos fires the cycle after map_gen.done.  On the done cycle the last
     // cell write has already landed in `cells` (it was registered one edge

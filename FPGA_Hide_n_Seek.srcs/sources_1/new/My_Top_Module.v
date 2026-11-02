@@ -11,6 +11,7 @@
 // Top module
 // Constraints: Basys3_Master.xdc + multiplayer_pins.xdc (JA link, USB port, 7-segment).
 // Two-board play: JA1 of each board to JA2 of the other, and JA5 (GND) to JA5.
+// OLED #1 (3D view) on JB, OLED #2 (minimap) on JXADC.
 module My_Top_Module (
     input clk,
     input btnC,
@@ -24,6 +25,7 @@ module My_Top_Module (
     output dp,
     output [3:0]an,
     output [7:0]JB,
+    output [7:0]JXADC,
     inout PS2Clk,
     inout PS2Data,
     output link_tx,
@@ -37,20 +39,6 @@ module My_Top_Module (
     localparam [7:0]DIR_EAST  = 8'd64;
     localparam [7:0]DIR_SOUTH = 8'd128;
     localparam [7:0]DIR_WEST  = 8'd192;
-
-    localparam [99:0] DEFAULT_MAP = {
-        10'b1111111111,
-        10'b1010001001,
-        10'b1010001001,
-        10'b1010011001,
-        10'b1010010001,
-        10'b1000000001,
-        10'b1100011001,
-        10'b1000010001,
-        10'b1000010001,
-        10'b1111111111
-    };
-    wire [99:0] map_bits = DEFAULT_MAP;
 
     wire frame_begin;
     wire sending_pixels;
@@ -77,6 +65,74 @@ module My_Top_Module (
     wire reveal_active, got_pinged;
     wire signed [15:0]reveal_x, reveal_y;
 
+    // ================= Andrew: world generation =================
+    // A new maze is built on every start_game, from the shared game_seed, so both
+    // boards (or the player and the bot) get the same map.  A boot maze (seed ACE1)
+    // is built once after power-up/reset so the screens are never all wall while
+    // the players pick roles.  Each new maze places this player on a corner
+    // (load_pos -> player_movement) and gives the bot the opposite corner.
+    wire is_hider = !sw[13];                 // sw13: 1 = Seeker (Jian Bin's role switch)
+
+    reg [2:0] boot_cnt = 3'd0;
+    reg       boot_start = 1'b0;
+    always @(posedge oled_clk) begin
+        if (reset_game) begin
+            boot_cnt   <= 3'd0;
+            boot_start <= 1'b0;
+        end else begin
+            boot_start <= (boot_cnt == 3'd3);          // exactly one pulse
+            if (boot_cnt != 3'd4) boot_cnt <= boot_cnt + 3'd1;
+        end
+    end
+
+    wire        gen_start = start_game | boot_start;
+    wire [15:0] gen_seed  = start_game ? game_seed : 16'hACE1;
+
+    wire [199:0]       cells;
+    wire [99:0]        map_bits;
+    wire               load_pos;
+    wire signed [15:0] load_x, load_y;
+    wire [7:0]         load_dir;
+    wire signed [15:0] bot_spawn_x, bot_spawn_y;
+    wire               bump;                 // not used yet (portal_ctrl, module 4)
+    wire [3:0]         bump_cx, bump_cy;
+
+    world_top #(.LOOP_WALLS(3)) world (
+        .clk           (oled_clk),
+        .reset         (reset_game),
+        .start         (gen_start),
+        .seed          (gen_seed),
+        .is_hider      (is_hider),
+        .respawn       (1'b0),               // game logic later: pulse on the countdown "go"
+        .portal_we     (1'b0),               // portal_ctrl later (module 4)
+        .portal_waddr  (8'd0),
+        .portal_wdata  (2'b00),
+        .portal_wgrant (),
+        .cap_we        (1'b0),               // capsule_ctrl later (module 5)
+        .cap_waddr     (8'd0),
+        .cap_wdata     (2'b00),
+        .cap_wgrant    (),
+        .rd_x          (4'd0),
+        .rd_y          (4'd0),
+        .rd_type       (),
+        .cells         (cells),
+        .map_bits      (map_bits),
+        .gen_busy      (),
+        .map_ready     (),
+        .map_done      (),
+        .load_pos      (load_pos),
+        .load_x        (load_x),
+        .load_y        (load_y),
+        .load_dir      (load_dir),
+        .opp_x         (),
+        .opp_y         (),
+        .opp_dir       (),
+        .opp_spawn_x   (bot_spawn_x),        // valid 1 cycle after start: in time for the bot
+        .opp_spawn_y   (bot_spawn_y),
+        .hider_cell    (),
+        .seeker_cell   ()
+    );
+
     multiplayer_core #(.CLK_HZ(6_250_000)) multiplayer (
         .clk             (oled_clk),
         .frame_begin     (frame_begin),
@@ -91,6 +147,8 @@ module My_Top_Module (
         .link_rx         (link_rx),
         .link_tx         (link_tx),
         .map_bits        (map_bits),
+        .bot_spawn_x     (bot_spawn_x),
+        .bot_spawn_y     (bot_spawn_y),
         .move_forward    (move_forward),
         .move_backward   (move_backward),
         .turn_left       (turn_left),
@@ -174,6 +232,7 @@ module My_Top_Module (
 
     // Player Movement Module
     // Stops while either player is paused, the link is lost, I am frozen or out of health.
+    // load_pos (from world_top) places the player on its corner whenever a maze finishes.
     player_movement #(
         .DIR_NORTH (DIR_NORTH),
         .DIR_EAST  (DIR_EAST),
@@ -188,9 +247,64 @@ module My_Top_Module (
         .btn_right    (turn_right),
         .frame_begin  (frame_begin && can_move),
         .map_bits     (map_bits),
+        .load_pos     (load_pos),
+        .load_x       (load_x),
+        .load_y       (load_y),
+        .load_dir     (load_dir),
+        .bump         (bump),
+        .bump_cx      (bump_cx),
+        .bump_cy      (bump_cy),
         .player_x     (player_x),
         .player_y     (player_y),
         .view_dir     (view_dir)
     );
+
+    // ================= Andrew: OLED #2 on JXADC (minimap) =================
+    wire        frame_begin2;
+    wire        sending_pixels2;
+    wire        sample_pixel2;
+    wire [12:0] pixel_index2;
+    wire [15:0] pixel_data2;
+    wire [15:0] minimap_pixel;
+    wire        in_minimap;
+
+    Oled_Display oled_display2 (
+        .clk            (oled_clk),
+        .reset          (reset_game),
+        .frame_begin    (frame_begin2),
+        .sending_pixels (sending_pixels2),
+        .sample_pixel   (sample_pixel2),
+        .pixel_index    (pixel_index2),
+        .pixel_data     (pixel_data2),
+        .cs             (JXADC[0]),
+        .sdin           (JXADC[1]),
+        .sclk           (JXADC[3]),
+        .d_cn           (JXADC[4]),
+        .resn           (JXADC[5]),
+        .vccen          (JXADC[6]),
+        .pmoden         (JXADC[7])
+    );
+    assign JXADC[2] = 1'b0;
+
+    minimap_render minimap (
+        .clk            (oled_clk),
+        .reset          (reset_game),
+        .pixel_index    (pixel_index2),
+        .cells          (cells),
+        .player_x       (player_x),
+        .player_y       (player_y),
+        .view_dir       (view_dir),
+        .pinger_active  (reveal_active),     // Seeker's Radio Pinger (Jian Bin)
+        .rx_hider_x     (reveal_x),
+        .rx_hider_y     (reveal_y),
+        .cap_fade_valid (2'b00),             // capsule_ctrl later
+        .cap_fade_cell0 (7'd0),
+        .cap_fade_cell1 (7'd0),
+        .pixel_data     (minimap_pixel),
+        .in_minimap     (in_minimap)
+    );
+
+    // Right strip (x = 64..95) is black until hud_render (module 8)
+    assign pixel_data2 = in_minimap ? minimap_pixel : 16'h0000;
 
 endmodule

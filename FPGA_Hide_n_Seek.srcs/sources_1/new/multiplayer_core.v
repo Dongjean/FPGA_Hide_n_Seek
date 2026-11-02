@@ -36,9 +36,7 @@ module multiplayer_core
     parameter integer CLK_HZ     = 6_250_000,
     parameter integer SIMPLE_AIM = 1,
     parameter [7:0]HIT_DAMAGE    = 8'd20,
-    parameter integer FREEZE_MS  = 5000,
-    parameter signed [15:0]BOT_SPAWN_X = 16'sd2176,   // cell (8, 8)
-    parameter signed [15:0]BOT_SPAWN_Y = 16'sd2176
+    parameter integer FREEZE_MS  = 5000
 )
 (
     input clk,                         // oled_clk (6.25 MHz)
@@ -57,6 +55,8 @@ module multiplayer_core
     output link_tx,                    // JA1
 
     input [99:0]map_bits,
+    input signed [15:0]bot_spawn_x,    // where the bot starts (Q8.8), e.g. world_top's opp_spawn_x
+    input signed [15:0]bot_spawn_y,
 
     // Controls for the rest of the game
     output move_forward,
@@ -208,8 +208,8 @@ module multiplayer_core
         .frame_tick      (frame_begin),
         .playing         (in_game),          // no countdown yet: play as soon as the match starts
         .map_bits        (map_bits),
-        .bot_spawn_x     (BOT_SPAWN_X),
-        .bot_spawn_y     (BOT_SPAWN_Y),
+        .bot_spawn_x     (bot_spawn_x),
+        .bot_spawn_y     (bot_spawn_y),
         .capsule_valid   (capsule_valid),
         .capsule_cells   (capsule_cells),
         .my_role         (my_role),
