@@ -63,11 +63,17 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, input [15:0]sw,
     };
 
     // ================= Andrew: world generation (test build) =================
-    // sw0 flip (either direction) -> new seed -> map_gen -> cell array -> OLED #2.
+    // sw0 flip (either direction) -> new seed -> world_top (map_gen + cell array
+    // + spawns) -> engine, player_movement and OLED #2.
     // A boot map (seed ACE1) is generated automatically after power-up/btnC so
-    // the screen is never blank.  Set USE_GENERATED_MAP = 0 to give Dongjin's
-    // engine the old DEFAULT_MAP again (the minimap still shows the new maze).
+    // the screen is never blank.  Each new map respawns the player at a corner.
+    // Set USE_GENERATED_MAP = 0 to give Dongjin's engine the old DEFAULT_MAP
+    // again (the minimap still shows the new maze, and spawning is turned off).
     localparam USE_GENERATED_MAP = 1;
+
+    // TEST BUILD ONLY: sw15 = this player's role (1 = Hider, 0 = Seeker).
+    // Game logic replaces this with the role picked in the menu.
+    wire is_hider = sw[15];
 
     // ---- Seed: sw0 flip on this board (host only for now) ----
     wire [15:0] seed;
@@ -103,41 +109,49 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, input [15:0]sw,
     wire        gen_start = seed_valid | boot_start;
     wire [15:0] gen_seed  = seed_valid ? seed : 16'hACE1;
 
-    // ---- Maze generator ----
-    wire       gen_busy, gen_done, gen_we;
-    wire [7:0] gen_waddr;
-    wire [1:0] gen_wdata;
-    map_gen #(.LOOP_WALLS(3)) maze (
-        .clk   (oled_clk),
-        .reset (btnC),
-        .start (gen_start),
-        .seed  (gen_seed),
-        .busy  (gen_busy),
-        .done  (gen_done),
-        .we    (gen_we),
-        .waddr (gen_waddr),
-        .wdata (gen_wdata)
+    // ---- World: maze, cell-type array, engine map, spawns ----
+    wire [199:0]       cells;
+    wire [99:0]        gen_map_bits;
+    wire               gen_busy, map_ready;
+    wire               load_pos;
+    wire signed [15:0] load_x, load_y;
+    wire [7:0]         load_dir;
+    wire               bump;            // not used yet (portal_ctrl, module 4)
+    wire [3:0]         bump_cx, bump_cy;
+
+    world_top #(.LOOP_WALLS(3)) world (
+        .clk           (oled_clk),
+        .reset         (btnC),
+        .start         (gen_start),
+        .seed          (gen_seed),
+        .is_hider      (is_hider),
+        .respawn       (1'b0),          // game logic: pulse on the countdown "go"
+        .portal_we     (1'b0),          // portal_ctrl later (module 4)
+        .portal_waddr  (8'd0),
+        .portal_wdata  (2'b00),
+        .portal_wgrant (),
+        .cap_we        (1'b0),          // capsule_ctrl later (module 5)
+        .cap_waddr     (8'd0),
+        .cap_wdata     (2'b00),
+        .cap_wgrant    (),
+        .rd_x          (4'd0),          // Toh's AI bot later
+        .rd_y          (4'd0),
+        .rd_type       (),
+        .cells         (cells),
+        .map_bits      (gen_map_bits),
+        .gen_busy      (gen_busy),
+        .map_ready     (map_ready),
+        .map_done      (),
+        .load_pos      (load_pos),
+        .load_x        (load_x),
+        .load_y        (load_y),
+        .load_dir      (load_dir),
+        .opp_x         (),
+        .opp_y         (),
+        .opp_dir       (),
+        .hider_cell    (),
+        .seeker_cell   ()
     );
-
-    // ---- Temporary cell-type array (replaced by world_top in module 6) ----
-    // cells[2*(y*10+x) +: 2]: 00 floor, 01 wall, 10 portal, 11 capsule
-    reg [199:0] cells = {100{2'b01}};
-    always @(posedge oled_clk) begin
-        if (btnC)
-            cells <= {100{2'b01}};                    // all wall until the boot map arrives
-        else if (gen_we)
-            cells[{gen_waddr[6:0], 1'b0} +: 2] <= gen_wdata;
-    end
-
-    // ---- Convert to the engine's format: bit (99 - (y*10+x)), 1 = solid ----
-    wire [99:0] gen_map_bits;
-    genvar gi;
-    generate
-        for (gi = 0; gi < 100; gi = gi + 1) begin : g_map_bits
-            assign gen_map_bits[99 - gi] = (cells[2*gi +: 2] == 2'b01) ||
-                                           (cells[2*gi +: 2] == 2'b10);
-        end
-    endgenerate
 
     wire [99:0] map_bits = USE_GENERATED_MAP ? gen_map_bits : DEFAULT_MAP;
 
@@ -158,8 +172,8 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, input [15:0]sw,
         .map_bits    (map_bits),
         .pixel_data  (pixel_data)
     );
-    
-    // Player Movement Module
+
+    // Player Movement Module (needs Dongjin's load/bump edit: player_movement_edits.diff)
     player_movement #(
         .DIR_NORTH (DIR_NORTH),
         .DIR_EAST  (DIR_EAST),
@@ -174,6 +188,13 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, input [15:0]sw,
         .btn_right    (btnR),
         .frame_begin  (frame_begin),
         .map_bits     (map_bits),
+        .load_pos     (load_pos && USE_GENERATED_MAP),   // corners only make sense on the generated map
+        .load_x       (load_x),
+        .load_y       (load_y),
+        .load_dir     (load_dir),
+        .bump         (bump),
+        .bump_cx      (bump_cx),
+        .bump_cy      (bump_cy),
         .player_x     (player_x),
         .player_y     (player_y),
         .view_dir     (view_dir)
