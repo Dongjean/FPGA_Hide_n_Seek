@@ -17,6 +17,7 @@ module game_screens
     localparam [15:0] COL_GREEN  = 16'h07E0;
     localparam [15:0] COL_MENU_BG = 16'h0005; // Dark blue
     localparam [15:0] COL_END_BG  = 16'h0140; // Dark green
+    localparam [15:0] COL_HIGHLIGHTED_TEXT  = 16'hFFE0; // Neon Yellow
 
     // pixel_index coordinate mapping
     wire [5:0] py = pixel_index / 13'd96;
@@ -28,33 +29,38 @@ module game_screens
         if (frame_begin) blink <= blink + 6'd1;
 
     // Menu text
-    wire t_hide, t_nseek, t_start;
-    text_line #(.N(4), .SCALE(2)) hide  (.px(px), .py(py), .x0(7'd24), .y0(6'd6),  .str("HIDE"),       .on(t_hide));
-    text_line #(.N(6), .SCALE(2)) nseek (.px(px), .py(py), .x0(7'd12), .y0(6'd22), .str("N SEEK"),     .on(t_nseek));
-    text_line #(.N(10),.SCALE(1)) start (.px(px), .py(py), .x0(7'd18), .y0(6'd48), .str("C TO START"), .on(t_start));
+    wire [1:0]t_hide;
+    wire [1:0]t_nseek;
+    wire [1:0]t_start;
+    text_line #(.N(4), .SCALE(2)) hide  (.px(px), .py(py), .x0(7'd24), .y0(6'd6),  .str("HIDE"),       .highlighted(0), .on(t_hide));
+    text_line #(.N(6), .SCALE(2)) nseek (.px(px), .py(py), .x0(7'd12), .y0(6'd22), .str("N SEEK"),     .highlighted(0), .on(t_nseek));
+    text_line #(.N(10),.SCALE(1)) start (.px(px), .py(py), .x0(7'd18), .y0(6'd48), .str("C TO START"), .highlighted(1), .on(t_start));
 
     // End text
-    wire t_win, t_menu;
-    text_line #(.N(7), .SCALE(2)) youwin  (.px(px), .py(py), .x0(7'd6),  .y0(6'd14), .str("YOU WIN"),     .on(t_win));
-    text_line #(.N(10),.SCALE(1)) cformenu (.px(px), .py(py), .x0(7'd18), .y0(6'd44), .str("C FOR MENU"), .on(t_menu));
+    wire [1:0]t_win;
+    wire [1:0]t_menu;
+    text_line #(.N(7), .SCALE(2)) youwin  (.px(px), .py(py), .x0(7'd6),  .y0(6'd14), .str("YOU WIN"),     .highlighted(0), .on(t_win));
+    text_line #(.N(10),.SCALE(1)) cformenu (.px(px), .py(py), .x0(7'd18), .y0(6'd44), .str("C FOR MENU"), .highlighted(1), .on(t_menu));
 
     wire border = (px < 7'd2) || (px > 7'd93) || (py < 6'd2) || (py > 6'd61);
 
     always @(*) begin
         if (state == S_END) begin
             // END screen
-            if (border)      pixel_data = COL_GREEN;
-            else if (t_win)  pixel_data = COL_YELLOW;
-            else if (t_menu) pixel_data = COL_WHITE;
-            else             pixel_data = COL_END_BG;
+            if (border)              pixel_data = COL_GREEN;
+            else if (t_win == 2'd1)  pixel_data = COL_YELLOW;
+            else if (t_menu == 2'd1) pixel_data = COL_WHITE;
+            else if (t_menu == 2'd2) pixel_data = COL_HIGHLIGHTED_TEXT;
+            else                     pixel_data = COL_END_BG;
         end else begin
             // state == S_MENU
             // When state == S_PLAYING, pixel_data wont even display this
             // MENU screen
-            if (border)                   pixel_data = COL_YELLOW;
-            else if (t_hide || t_nseek)   pixel_data = COL_YELLOW;
-            else if (t_start && blink[5]) pixel_data = COL_WHITE;
-            else                          pixel_data = COL_MENU_BG;
+            if (border)                           pixel_data = COL_YELLOW;
+            else if (t_hide || t_nseek)           pixel_data = COL_YELLOW;
+            else if (t_start == 2'd1 && blink[5]) pixel_data = COL_WHITE;
+            else if (t_start == 2'd2) pixel_data = COL_HIGHLIGHTED_TEXT;
+            else                                  pixel_data = COL_MENU_BG;
         end
     end
 endmodule

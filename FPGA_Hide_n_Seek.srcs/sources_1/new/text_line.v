@@ -1,24 +1,25 @@
 `timescale 1ns / 1ps
 
 // Draws one line of text (N characters) at (x0,y0), magnified by SCALE.
-// Each character cell is 6*SCALE wide (5 glyph columns + 1 gap) and 7*SCALE tall.
+// Each character cell is 7*SCALE wide (1 gap + 5 glyph columns + 1 gap) and 7*SCALE tall.
 module text_line
 #(
     parameter integer N     = 4,
     parameter integer SCALE = 1
 )
 (
-    input  [6:0]     px,  // Current pixel x
-    input  [5:0]     py,  // Current pxiel y
-    input  [6:0]     x0,  // Top left x
-    input  [5:0]     y0,  // Top right y
-    input  [8*N-1:0] str, // String to display
-    output reg       on   // Output variable (1 if the (px,py) is inside the text, 0 if not)
+    input  [6:0]     px,          // Current pixel x
+    input  [5:0]     py,          // Current pxiel y
+    input  [6:0]     x0,          // Top left x
+    input  [5:0]     y0,          // Top right y
+    input  [8*N-1:0] str,         // String to display
+    input            highlighted, // Whether or not the text is currently highlighted
+    output reg [1:0] on           // Output variable (1 if the (px,py) is inside the text, 0 if not, 2 if (px,py) is in the bg)
 );
     `include "font.vh"
 
     // The character cell
-    localparam integer CELL_W = 6 * SCALE;
+    localparam integer CELL_W = 7 * SCALE;
 
     integer dx, dy, idx, col, row;
     reg [7:0]  ch;
@@ -43,8 +44,12 @@ module text_line
             // This is scaled based on SCALE
             col  = (dx % CELL_W) / SCALE;
             row  = dy / SCALE;
-            if (col < 5) // If col == 5, then dont display
-                on = bits[34 - (row * 5) - col]; // Return the current pixel
+            if (col > 0 && col < 6 && bits[34 - (row * 5) - col]) // If col == 5, then dont display
+                on = 1'd1; // Return the current pixel
+            else if (highlighted) // Here, (px,py) is in the bg of the text, highlight it
+                on = 2'd2;
+            else
+                on = 2'd0;
         end
     end
 endmodule
