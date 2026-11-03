@@ -1,310 +1,75 @@
 `timescale 1ns / 1ps
-
 //////////////////////////////////////////////////////////////////////////////////
-//  FILL IN THE FOLLOWING INFORMATION:
-//  STUDENT A NAME: Dongjin Shin
-//  STUDENT B NAME: Isaac Goh Yong Chee
-//  STUDENT C NAME: Andrew Chong Kian Wei
-//  STUDENT D NAME: Toh Jian Bin
+// item_counters - gun ammo and item uses (PLACEHOLDER until the team decides
+// who owns these; the proposal has no owner for them yet)
+//
+//   Gun  (Seeking Gun / Freeze Gun): 5 bullets, +1 every 60 s of game time
+//                                    while below 5.
+//   Item (Radio Pinger / Stim Shot): 3 uses, no recharge.
+//
+// It counts the same presses multiplayer_core acts on:
+//   gun  = shoot && in_game && can_move && weapon_sel[0] == 0
+//   item = shoot && in_game && can_move && weapon_sel[0] == 1
+// has_ammo / has_use say whether the next press is allowed.  IMPORTANT: Jian
+// Bin's multiplayer_core does not look at them yet, so at 0 you can still
+// fire there; only capsule shots are blocked (the top gates capsule_ctrl).
+// Clock: oled_clk (6.25 MHz).  Reset: synchronous, active-high.
 //////////////////////////////////////////////////////////////////////////////////
-
-// Top module
-// Constraints: Basys3_Master.xdc + multiplayer_pins.xdc (JA link, USB port, 7-segment).
-// Two-board play: JA1 of each board to JA2 of the other, and JA5 (GND) to JA5.
-// OLED #1 (3D view) on JB, OLED #2 (minimap) on JXADC.
-module My_Top_Module (
-    input clk,
-    input btnC,
-    input btnU,
-    input btnD,
-    input btnL,
-    input btnR,
-    input [15:0]sw,
-    output [15:0]led,
-    output [6:0]seg,
-    output dp,
-    output [3:0]an,
-    output [7:0]JB,
-    output [7:0]JXADC,
-    inout PS2Clk,
-    inout PS2Data,
-    output link_tx,
-    input link_rx
+module item_counters
+#(
+    parameter integer SEC_CYCLES   = 6_250_000,
+    parameter integer MAX_AMMO     = 5,
+    parameter integer MAX_USES     = 3,
+    parameter integer RECHARGE_SEC = 60
+)
+(
+    input            clk,
+    input            reset,
+    input            start,           // 1-cycle: new match -> full
+    input            in_game,
+    input            game_paused,     // recharge time stops while paused
+    input            shoot,           // 1-cycle (player_controls)
+    input      [1:0] weapon_sel,      // [0]: 0 = gun, 1 = item
+    input            can_move,
+    output reg [2:0] ammo,            // 0..5
+    output reg [1:0] uses,            // 0..3
+    output           has_ammo,
+    output           has_use,
+    output           fired_gun,       // 1-cycle: a counted gun shot (ammo was > 0)
+    output           used_item        // 1-cycle: a counted item use (uses was > 0)
 );
+    assign has_ammo = (ammo != 3'd0);
+    assign has_use  = (uses != 2'd0);
 
-    wire oled_clk;
-    clk_6p25m oled_clk_gen (.clk(clk), .slow_clk(oled_clk));
+    wire act = shoot && in_game && can_move;
+    assign fired_gun = act && (weapon_sel[0] == 1'b0) && has_ammo;
+    assign used_item = act && (weapon_sel[0] == 1'b1) && has_use;
 
-    localparam [7:0]DIR_NORTH = 8'd0;
-    localparam [7:0]DIR_EAST  = 8'd64;
-    localparam [7:0]DIR_SOUTH = 8'd128;
-    localparam [7:0]DIR_WEST  = 8'd192;
+    reg [22:0] sub_cnt;               // clocks within the second
+    reg [5:0]  rc_sec;                // seconds towards the next bullet
+    wire running  = in_game && !game_paused;
+    wire sec_tick = running && (sub_cnt == SEC_CYCLES - 1);
+    wire refill   = sec_tick && (rc_sec == RECHARGE_SEC - 1) && (ammo < MAX_AMMO);
 
-    wire frame_begin;
-    wire sending_pixels;
-    wire sample_pixel;
-    wire [12:0]pixel_index;
-    wire [15:0]pixel_data;
-
-    // Player location in Q8.8 units
-    wire signed [15:0]player_x;
-    wire signed [15:0]player_y;
-    wire [7:0]view_dir;
-
-    // ---------------- Controls, other player (link or bot), status ----------------
-    wire move_forward, move_backward, turn_left, turn_right, can_move;
-    wire shoot, paused, reset_game;
-    wire [1:0]weapon_sel;
-    wire [7:0]my_health;
-    wire my_frozen;
-    wire in_game, start_game, restart_game, game_paused, link_up;
-    wire [15:0]game_seed;
-    wire signed [15:0]op_x, op_y;           // other player: draw these (sprite / minimap)
-    wire [7:0]op_dir, op_health;
-    wire op_frozen;
-    wire reveal_active, got_pinged;
-    wire signed [15:0]reveal_x, reveal_y;
-
-    // ================= Andrew: world generation =================
-    // A new maze is built on every start_game, from the shared game_seed, so both
-    // boards (or the player and the bot) get the same map.  A boot maze (seed ACE1)
-    // is built once after power-up/reset so the screens are never all wall while
-    // the players pick roles.  Each new maze places this player on a corner
-    // (load_pos -> player_movement) and gives the bot the opposite corner.
-    wire is_hider = !sw[13];                 // sw13: 1 = Seeker (Jian Bin's role switch)
-
-    reg [2:0] boot_cnt = 3'd0;
-    reg       boot_start = 1'b0;
-    always @(posedge oled_clk) begin
-        if (reset_game) begin
-            boot_cnt   <= 3'd0;
-            boot_start <= 1'b0;
+    always @(posedge clk) begin
+        if (reset || start) begin
+            ammo    <= MAX_AMMO;
+            uses    <= MAX_USES;
+            sub_cnt <= 23'd0;
+            rc_sec  <= 6'd0;
         end else begin
-            boot_start <= (boot_cnt == 3'd3);          // exactly one pulse
-            if (boot_cnt != 3'd4) boot_cnt <= boot_cnt + 3'd1;
+            if (running) sub_cnt <= sec_tick ? 23'd0 : sub_cnt + 23'd1;
+
+            // Recharge clock only runs while a bullet is missing, so a refill
+            // always comes a full 60 s after the magazine was last full.
+            if (ammo == MAX_AMMO)  rc_sec <= 6'd0;
+            else if (sec_tick)     rc_sec <= (rc_sec == RECHARGE_SEC - 1) ? 6'd0 : rc_sec + 6'd1;
+
+            // shot and refill in the same cycle cancel out
+            if (fired_gun && !refill)      ammo <= ammo - 3'd1;
+            else if (refill && !fired_gun) ammo <= ammo + 3'd1;
+
+            if (used_item) uses <= uses - 2'd1;
         end
     end
-
-    wire        gen_start = start_game | boot_start;
-    wire [15:0] gen_seed  = start_game ? game_seed : 16'hACE1;
-
-    wire [199:0]       cells;
-    wire [99:0]        map_bits;
-    wire               load_pos;
-    wire signed [15:0] load_x, load_y;
-    wire [7:0]         load_dir;
-    wire signed [15:0] bot_spawn_x, bot_spawn_y;
-    wire               bump;                 // not used yet (portal_ctrl, module 4)
-    wire [3:0]         bump_cx, bump_cy;
-
-    world_top #(.LOOP_WALLS(3)) world (
-        .clk           (oled_clk),
-        .reset         (reset_game),
-        .start         (gen_start),
-        .seed          (gen_seed),
-        .is_hider      (is_hider),
-        .respawn       (1'b0),               // game logic later: pulse on the countdown "go"
-        .portal_we     (1'b0),               // portal_ctrl later (module 4)
-        .portal_waddr  (8'd0),
-        .portal_wdata  (2'b00),
-        .portal_wgrant (),
-        .cap_we        (1'b0),               // capsule_ctrl later (module 5)
-        .cap_waddr     (8'd0),
-        .cap_wdata     (2'b00),
-        .cap_wgrant    (),
-        .rd_x          (4'd0),
-        .rd_y          (4'd0),
-        .rd_type       (),
-        .cells         (cells),
-        .map_bits      (map_bits),
-        .gen_busy      (),
-        .map_ready     (),
-        .map_done      (),
-        .load_pos      (load_pos),
-        .load_x        (load_x),
-        .load_y        (load_y),
-        .load_dir      (load_dir),
-        .opp_x         (),
-        .opp_y         (),
-        .opp_dir       (),
-        .opp_spawn_x   (bot_spawn_x),        // valid 1 cycle after start: in time for the bot
-        .opp_spawn_y   (bot_spawn_y),
-        .hider_cell    (),
-        .seeker_cell   ()
-    );
-
-    multiplayer_core #(.CLK_HZ(6_250_000)) multiplayer (
-        .clk             (oled_clk),
-        .frame_begin     (frame_begin),
-        .btnU            (btnU),
-        .btnD            (btnD),
-        .btnL            (btnL),
-        .btnR            (btnR),
-        .btnC            (btnC),
-        .sw              (sw),
-        .PS2Clk          (PS2Clk),
-        .PS2Data         (PS2Data),
-        .link_rx         (link_rx),
-        .link_tx         (link_tx),
-        .map_bits        (map_bits),
-        .bot_spawn_x     (bot_spawn_x),
-        .bot_spawn_y     (bot_spawn_y),
-        .move_forward    (move_forward),
-        .move_backward   (move_backward),
-        .turn_left       (turn_left),
-        .turn_right      (turn_right),
-        .can_move        (can_move),
-        .shoot           (shoot),
-        .weapon_sel      (weapon_sel),
-        .paused          (paused),
-        .reset_game      (reset_game),
-        .my_x            (player_x),
-        .my_y            (player_y),
-        .my_dir          (view_dir),
-        .my_health       (my_health),
-        .my_frozen       (my_frozen),
-        .in_game         (in_game),
-        .start_game      (start_game),
-        .restart_game    (restart_game),
-        .game_seed       (game_seed),
-        .game_paused     (game_paused),
-        .link_up         (link_up),
-        .op_x            (op_x),
-        .op_y            (op_y),
-        .op_dir          (op_dir),
-        .op_health       (op_health),
-        .op_frozen       (op_frozen),
-        .reveal_active   (reveal_active),
-        .reveal_x        (reveal_x),
-        .reveal_y        (reveal_y),
-        .got_pinged      (got_pinged),
-        .renderer_hit    (1'b0),
-        .my_stim         (1'b0),
-        .peer_stim_used  (),
-        .capsule_valid   (4'd0),
-        .capsule_cells   (32'd0),
-        .ev_capsule      (1'b0),
-        .capsule_id      (8'd0),
-        .peer_capsule    (),
-        .peer_capsule_id (),
-        .led             (led),
-        .seg             (seg),
-        .dp              (dp),
-        .an              (an)
-    );
-
-    // Oled Display module
-    Oled_Display oled_display (
-        .clk            (oled_clk),
-        .reset          (reset_game),
-        .frame_begin    (frame_begin),
-        .sending_pixels (sending_pixels),
-        .sample_pixel   (sample_pixel),
-        .pixel_index    (pixel_index),
-        .pixel_data     (pixel_data),
-        .cs             (JB[0]),
-        .sdin           (JB[1]),
-        .sclk           (JB[3]),
-        .d_cn           (JB[4]),
-        .resn           (JB[5]),
-        .vccen          (JB[6]),
-        .pmoden         (JB[7])
-    );
-    assign JB[2] = 1'b0;
-
-    // 3D Renderer
-    Raycast_3D_Engine #(
-        .DIR_NORTH (DIR_NORTH),
-        .DIR_EAST  (DIR_EAST),
-        .DIR_SOUTH (DIR_SOUTH),
-        .DIR_WEST  (DIR_WEST)
-    ) renderer (
-        .clk         (oled_clk),
-        .reset       (reset_game),
-        .player_x    (player_x),
-        .player_y    (player_y),
-        .view_dir    (view_dir),
-        .frame_begin (frame_begin),
-        .pixel_index (pixel_index),
-        .map_bits    (map_bits),
-        .pixel_data  (pixel_data)
-    );
-
-    // Player Movement Module
-    // Stops while either player is paused, the link is lost, I am frozen or out of health.
-    // load_pos (from world_top) places the player on its corner whenever a maze finishes.
-    player_movement #(
-        .DIR_NORTH (DIR_NORTH),
-        .DIR_EAST  (DIR_EAST),
-        .DIR_SOUTH (DIR_SOUTH),
-        .DIR_WEST  (DIR_WEST)
-    ) player_mover (
-        .clk          (oled_clk),
-        .reset        (reset_game),
-        .btn_forward  (move_forward),
-        .btn_backward (move_backward),
-        .btn_left     (turn_left),
-        .btn_right    (turn_right),
-        .frame_begin  (frame_begin && can_move),
-        .map_bits     (map_bits),
-        .load_pos     (load_pos),
-        .load_x       (load_x),
-        .load_y       (load_y),
-        .load_dir     (load_dir),
-        .bump         (bump),
-        .bump_cx      (bump_cx),
-        .bump_cy      (bump_cy),
-        .player_x     (player_x),
-        .player_y     (player_y),
-        .view_dir     (view_dir)
-    );
-
-    // ================= Andrew: OLED #2 on JXADC (minimap) =================
-    wire        frame_begin2;
-    wire        sending_pixels2;
-    wire        sample_pixel2;
-    wire [12:0] pixel_index2;
-    wire [15:0] pixel_data2;
-    wire [15:0] minimap_pixel;
-    wire        in_minimap;
-
-    Oled_Display oled_display2 (
-        .clk            (oled_clk),
-        .reset          (reset_game),
-        .frame_begin    (frame_begin2),
-        .sending_pixels (sending_pixels2),
-        .sample_pixel   (sample_pixel2),
-        .pixel_index    (pixel_index2),
-        .pixel_data     (pixel_data2),
-        .cs             (JXADC[0]),
-        .sdin           (JXADC[1]),
-        .sclk           (JXADC[3]),
-        .d_cn           (JXADC[4]),
-        .resn           (JXADC[5]),
-        .vccen          (JXADC[6]),
-        .pmoden         (JXADC[7])
-    );
-    assign JXADC[2] = 1'b0;
-
-    minimap_render minimap (
-        .clk            (oled_clk),
-        .reset          (reset_game),
-        .pixel_index    (pixel_index2),
-        .cells          (cells),
-        .player_x       (player_x),
-        .player_y       (player_y),
-        .view_dir       (view_dir),
-        .pinger_active  (reveal_active),     // Seeker's Radio Pinger (Jian Bin)
-        .rx_hider_x     (reveal_x),
-        .rx_hider_y     (reveal_y),
-        .cap_fade_valid (2'b00),             // capsule_ctrl later
-        .cap_fade_cell0 (7'd0),
-        .cap_fade_cell1 (7'd0),
-        .pixel_data     (minimap_pixel),
-        .in_minimap     (in_minimap)
-    );
-
-    // Right strip (x = 64..95) is black until hud_render (module 8)
-    assign pixel_data2 = in_minimap ? minimap_pixel : 16'h0000;
-
 endmodule

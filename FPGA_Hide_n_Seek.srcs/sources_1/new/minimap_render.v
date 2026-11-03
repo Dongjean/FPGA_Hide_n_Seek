@@ -10,10 +10,11 @@
 //   1. Radio Pinger blip : red 2x2 at the Hider's position, blinking at 4 Hz,
 //                          only while pinger_active
 //   2. Player dot        : white 2x2 at this player's position
-//   3. Direction tick    : cyan, 2 pixels just outside the dot along view_dir
-//   4. Cell colour       : wall grey, floor black, portal purple,
+//   3. Opponent dot      : orange 2x2 at the other player / bot, while opp_show
+//   4. Direction tick    : cyan, 2 pixels just outside the dot along view_dir
+//   5. Cell colour       : wall grey, floor black, portal purple,
 //                          capsule yellow (blinks at 4 Hz in its last 5 s)
-//   5. Margin            : black
+//   6. Margin            : black
 //
 // Cell-type input (owned by world_top):
 //   cells[199:0], cell (x,y) at cells[2*(y*10 + x) +: 2]   (LSB-first, row-major)
@@ -51,6 +52,10 @@ module minimap_render
     input  signed     [15:0] rx_hider_x,      // Hider position from Toh's link, Q8.8
     input  signed     [15:0] rx_hider_y,
 
+    input                    opp_show,        // draw the opponent (in_game)
+    input  signed     [15:0] opp_x,           // other player or bot, Q8.8 (Jian Bin's op_x)
+    input  signed     [15:0] opp_y,
+
     input             [1:0]  cap_fade_valid,  // capsule 0/1 is in its last 5 s
     input             [6:0]  cap_fade_cell0,  // its cell index y*10 + x
     input             [6:0]  cap_fade_cell1,
@@ -68,6 +73,7 @@ module minimap_render
     localparam [15:0] C_WHITE  = 16'hFFFF;
     localparam [15:0] C_CYAN   = 16'h07FF;   // r0  g63 b31
     localparam [15:0] C_RED    = 16'hF800;
+    localparam [15:0] C_ORANGE = 16'hFC00;   // r31 g32 b0 (opponent)
 
     localparam [1:0] T_FLOOR = 2'b00, T_WALL = 2'b01, T_PORTAL = 2'b10, T_CAPSULE = 2'b11;
 
@@ -115,6 +121,8 @@ module minimap_render
     reg [6:0] t1_x, t1_y;          // tick pixel 1 (near)
     reg [6:0] t2_x, t2_y;          // tick pixel 2 (far)
     reg [6:0] blip_x, blip_y;      // Hider blip, same 2x2 shape as the dot
+    reg [6:0] opp_px, opp_py;      // opponent dot, same 2x2 shape
+    reg       opp_on;              // opp_show, registered with the position
 
     wire [6:0]        dx_c  = to_px(player_x);
     wire [6:0]        dy_c  = to_px(player_y);
@@ -132,6 +140,8 @@ module minimap_render
             t1_x  <= 7'd0; t1_y  <= 7'd0;
             t2_x  <= 7'd0; t2_y  <= 7'd0;
             blip_x <= 7'd0; blip_y <= 7'd0;
+            opp_px <= 7'd0; opp_py <= 7'd0;
+            opp_on <= 1'b0;
         end else begin
             dot_x  <= dx_c;
             dot_y  <= dy_c;
@@ -143,6 +153,9 @@ module minimap_render
             t2_y   <= dy_c + {{3{o2y[3]}}, o2y};
             blip_x <= to_px(rx_hider_x);
             blip_y <= to_px(rx_hider_y);
+            opp_px <= to_px(opp_x);
+            opp_py <= to_px(opp_y);
+            opp_on <= opp_show;
         end
     end
 
@@ -174,6 +187,9 @@ module minimap_render
                    ({1'b0, pixel_y} == blip_y || {1'b0, pixel_y} == blip_y - 7'd1);
     wire on_dot  = (pixel_x == dot_x || pixel_x == dot_x - 7'd1) &&
                    ({1'b0, pixel_y} == dot_y || {1'b0, pixel_y} == dot_y - 7'd1);
+    wire on_opp  = opp_on &&
+                   (pixel_x == opp_px || pixel_x == opp_px - 7'd1) &&
+                   ({1'b0, pixel_y} == opp_py || {1'b0, pixel_y} == opp_py - 7'd1);
     wire on_tick = (pixel_x == t1_x && {1'b0, pixel_y} == t1_y) ||
                    (pixel_x == t2_x && {1'b0, pixel_y} == t2_y);
 
@@ -182,6 +198,7 @@ module minimap_render
         if (!in_minimap || !in_map)  pixel_data = C_BLACK;
         else if (on_blip)            pixel_data = C_RED;
         else if (on_dot)             pixel_data = C_WHITE;
+        else if (on_opp)             pixel_data = C_ORANGE;   // above the tick and cells
         else if (on_tick)            pixel_data = C_CYAN;
         else begin
             case (ctype)
