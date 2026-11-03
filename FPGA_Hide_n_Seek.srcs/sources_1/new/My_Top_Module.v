@@ -63,6 +63,7 @@ module My_Top_Module (
     wire [7:0]op_dir, op_health;
     wire op_frozen;
     wire reveal_active, got_pinged;
+    wire peer_flash;                        // other board's Hider used a Flashbang
     wire signed [15:0]reveal_x, reveal_y;
 
     // ================= Andrew: world generation =================
@@ -189,8 +190,7 @@ module My_Top_Module (
         .exit_cells    (exit_cells)
     );
 
-    // ---- Time Capsules: spawn every 40 s, Hider shoots them for -30 s ----
-    // shoot is fired_gun from item_counters, so an empty gun cannot hit capsules.
+    // ---- Time Capsules: spawn every 40 s, the Hider walks over one to take time off ----
     capsule_ctrl capsules (
         .clk             (oled_clk),
         .reset           (reset_game),
@@ -210,13 +210,9 @@ module My_Top_Module (
         .cap_wgrant      (cap_wgrant),
         .player_x        (player_x),
         .player_y        (player_y),
-        .view_dir        (view_dir),
         .op_x            (op_x),
         .op_y            (op_y),
         .is_hider        (is_hider),
-        .shoot           (fired_gun),
-        .weapon_sel      (weapon_sel),
-        .can_move        (can_move),
         .ev_capsule      (ev_capsule),
         .capsule_id      (capsule_id),
         .peer_capsule    (peer_capsule),
@@ -309,7 +305,7 @@ module My_Top_Module (
         .got_pinged      (got_pinged),
         .renderer_hit    (1'b0),
         .my_stim         (1'b0),
-        .peer_stim_used  (),
+        .peer_stim_used  (peer_flash),       // the Hider used a Flashbang (Stim event reused)
         .capsule_valid   (capsule_valid),    // the bot (Hider) can see and shoot capsules
         .capsule_cells   (capsule_cells),
         .ev_capsule      (ev_capsule),       // I shot a capsule -> other board
@@ -416,12 +412,23 @@ module My_Top_Module (
     );
     assign JXADC[2] = 1'b0;
 
-    // OLED #2 is mounted upside down on JXADC, so turn the picture 180 degrees:
-    // pixel i of the screen shows what the renderers draw for pixel 6143 - i
-    // (6143 = 96*64 - 1 reverses both x and y).  Set OLED2_FLIP to 0 if a board
-    // has the screen the other way round.
-    localparam OLED2_FLIP = 1'b0;
+    // OLED #2 sits on JXADC, which faces the opposite way to JB, so the screen is
+    // turned 180 degrees: pixel i of the screen shows what the renderers draw for
+    // pixel 6143 - i (6143 = 96*64 - 1 reverses both x and y).
     wire [12:0] pix2 = 13'd6143 - pixel_index2;
+
+    // Flashbang: on the Seeker's minimap the Hider's dot blinks 1 s, then is
+    // hidden 5 s (dot and Pinger blip).  Only the Seeker's board reacts.
+    wire opp_visible;
+    flashbang_ctrl flashbang (
+        .clk          (oled_clk),
+        .reset        (reset_game),
+        .start        (start_game),
+        .game_paused  (game_paused),
+        .flash        (peer_flash && !is_hider),
+        .opp_visible  (opp_visible),
+        .flash_active ()
+    );
 
     minimap_render minimap (
         .clk            (oled_clk),
@@ -431,10 +438,10 @@ module My_Top_Module (
         .player_x       (player_x),
         .player_y       (player_y),
         .view_dir       (view_dir),
-        .pinger_active  (reveal_active),     // Seeker's Radio Pinger (Jian Bin)
+        .pinger_active  (reveal_active && opp_visible),  // Pinger blip, unless flashbanged
         .rx_hider_x     (reveal_x),
         .rx_hider_y     (reveal_y),
-        .opp_show       (in_game),           // opponent always visible during a match
+        .opp_show       (in_game && opp_visible),        // opponent dot, unless flashbanged
         .opp_x          (op_x),              // other board's player, or the bot in solo
         .opp_y          (op_y),
         .cap_fade_valid (cap_fade_valid),    // capsule blinks in its last 5 s

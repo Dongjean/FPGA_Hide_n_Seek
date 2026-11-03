@@ -4,7 +4,7 @@
 //
 // Same ports as the original spec for Isaac's timer, so his module can replace
 // this one without touching hud_render or capsule_ctrl:
-//   time_penalty in (1-cycle: -30 s), game_seconds_left[8:0] out.
+//   time_penalty in (1-cycle: -10 s), game_seconds_left[8:0] out.
 //
 // Starts at MATCH_SEC on start, counts down one per second while the match runs
 // (in_game and not paused), never goes below 0, pulses time_up once at 0.
@@ -16,7 +16,7 @@ module match_timer
 #(
     parameter integer SEC_CYCLES  = 6_250_000,   // clocks per second
     parameter integer MATCH_SEC   = 300,         // 5:00
-    parameter integer PENALTY_SEC = 30
+    parameter integer PENALTY_SEC = 10     // rev 10: a capsule takes 10 s off
 )
 (
     input            clk,
