@@ -13,17 +13,30 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, output [7:0]JB);
 
     wire oled_clk;
     clk_6p25m oled_clk_gen (.clk(clk), .slow_clk(oled_clk));
+    
+    // Game state managers for FSM
+    localparam [1:0]STATE_MENU    = 2'd0;
+    localparam [1:0]STATE_PLAYING = 2'd1;
+    localparam [1:0]STATE_END     = 2'd2;
+    wire [1:0]game_state;
 
     wire frame_begin;
     wire sending_pixels;
     wire sample_pixel;
     wire [12:0]pixel_index;
-    wire [15:0]pixel_data;
+    
+    // Pixel data variables
+    wire [15:0]pixel_data;      // Master Oled Display (we set this to wtv we want the Oled to show)
+    wire [15:0]game_pixel_data; // 3D engine output data
+    wire [15:0]ui_pixel_data;   // menu / end screen output data
 
-    // Oled Display module
+    // Decide what to display based on the game state
+    assign pixel_data = (game_state == STATE_PLAYING) ? game_pixel_data : ui_pixel_data;
+
+    // Oled Display module (this just displays whatever pixel_data has)
     Oled_Display oled_display (
         .clk            (oled_clk),
-        .reset          (btnC),
+        .reset          (1'b0),
         .frame_begin    (frame_begin),
         .sending_pixels (sending_pixels),
         .sample_pixel   (sample_pixel),
@@ -36,6 +49,26 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, output [7:0]JB);
         .resn           (JB[5]),
         .vccen          (JB[6]),
         .pmoden         (JB[7])
+    );
+    
+    // Game state machine
+    // MENU -> PLAYING -> END -> MENU ...
+    // This sets game_state
+    game_fsm fsm (
+        .clk         (oled_clk),
+        .reset       (1'b0),
+        .frame_begin (frame_begin),
+        .btn_confirm (btnC),
+        .state       (game_state)
+    );
+
+    // Menu/end screens (TODO: add pause screen too)
+    game_screens screens (
+        .clk         (oled_clk),
+        .frame_begin (frame_begin),
+        .state       (game_state),
+        .pixel_index (pixel_index),
+        .pixel_data  (ui_pixel_data)
     );
 
     localparam [7:0]DIR_NORTH = 8'd0;
@@ -77,7 +110,7 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, output [7:0]JB);
         .frame_begin (frame_begin),
         .pixel_index (pixel_index),
         .map_bits    (map_bits),
-        .pixel_data  (pixel_data)
+        .pixel_data  (game_pixel_data)
     );
     
     // Player Movement Module
