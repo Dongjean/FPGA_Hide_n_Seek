@@ -9,7 +9,7 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 // Top module
-module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, output [7:0]JB);
+module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, [4:0]sw, output [7:0]JB);
 
     wire oled_clk;
     clk_6p25m oled_clk_gen (.clk(clk), .slow_clk(oled_clk));
@@ -80,6 +80,10 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, output [7:0]JB);
     wire signed [15:0]player_x;
     wire signed [15:0]player_y;
     wire [7:0]view_dir;
+    
+    wire signed [15:0] op_x;
+    wire signed [15:0] op_y;
+    wire [7:0] op_dir;
 
     localparam [99:0] DEFAULT_MAP = {
         10'b1111111111,
@@ -95,6 +99,12 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, output [7:0]JB);
     };
     wire [99:0] map_bits = DEFAULT_MAP;
 
+    // ---- Sprite, shots, ornaments (Isaac) ----
+    // Seeker sees the Hider as a room object (from the seed), Hider sees the hunter
+    wire       spr_enable = 1'b1;
+//    wire [1:0] disguise   = (game_seed[1:0] == 2'd3) ? 2'd1 : game_seed[1:0] + 2'd1;   // 1..3
+    wire [1:0] spr_obj    = 1'b1 ? 2'd0 : 2'd1;
+
     // 3D Renderer
     Raycast_3D_Engine #(
         .DIR_NORTH (DIR_NORTH),
@@ -103,13 +113,19 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, output [7:0]JB);
         .DIR_WEST  (DIR_WEST)
     ) renderer (
         .clk         (oled_clk),
-        .reset       (btnC),
+        .reset       (reset_game),
         .player_x    (player_x),
         .player_y    (player_y),
         .view_dir    (view_dir),
         .frame_begin (frame_begin),
         .pixel_index (pixel_index),
         .map_bits    (map_bits),
+        .spr_enable  (spr_enable),
+        .spr_obj     (spr_obj),
+        .spr_x       (op_x),
+        .spr_y       (op_y),
+        .spr_facing  (op_dir),
+        .crosshair_hit (crosshair_hit),
         .pixel_data  (game_pixel_data)
     );
     
@@ -131,6 +147,26 @@ module My_Top_Module (input clk, btnC, btnU, btnD, btnL, btnR, output [7:0]JB);
         .player_x     (player_x),
         .player_y     (player_y),
         .view_dir     (view_dir)
+    );
+
+    // Enemy Player Movement Module
+    player_movement #(
+        .DIR_NORTH (DIR_NORTH),
+        .DIR_EAST  (DIR_EAST),
+        .DIR_SOUTH (DIR_SOUTH),
+        .DIR_WEST  (DIR_WEST)
+    ) enemy_player_mover (
+        .clk          (oled_clk),
+        .reset        (btnC),
+        .btn_forward  (sw[0]),
+        .btn_backward (sw[1]),
+        .btn_left     (sw[2]),
+        .btn_right    (sw[4]),
+        .frame_begin  (frame_begin),
+        .map_bits     (map_bits),
+        .player_x     (op_x),
+        .player_y     (op_y),
+        .view_dir     (op_dir)
     );
 
 endmodule

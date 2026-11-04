@@ -44,7 +44,7 @@ module text_line
             // This is scaled based on SCALE
             col  = (dx % CELL_W) / SCALE;
             row  = dy / SCALE;
-            if (col > 0 && col < 6 && bits[34 - (row * 5) - col]) // If col == 5, then dont display
+            if (col > 0 && col < 6 && bits[34 - (row * 5) + 1 - col]) // If col == 5, then dont display
                 on = 1'd1; // Return the current pixel
             else if (highlighted) // Here, (px,py) is in the bg of the text, highlight it
                 on = 2'd2;

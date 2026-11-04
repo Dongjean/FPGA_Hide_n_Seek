@@ -18,6 +18,15 @@ module Raycast_3D_Engine
     input [12:0]pixel_index,
     input [99:0]map_bits,
     
+    // Sprites
+    input spr_enable,
+    input [1:0]spr_obj,
+    input signed [15:0]spr_x,
+    input signed [15:0]spr_y,
+    input [7:0]spr_facing,
+    
+    output crosshair_hit,
+    
     output reg [15:0]pixel_data
 );
 
@@ -48,6 +57,14 @@ module Raycast_3D_Engine
     reg      wall_ew_a     [0:RAY_COLUMNS-1];
     reg [3:0]wall_u_b      [0:RAY_COLUMNS-1];
     reg      wall_ew_b     [0:RAY_COLUMNS-1];
+    reg [7:0] wall_dist_a [0:RAY_COLUMNS-1];
+    reg [7:0] wall_dist_b [0:RAY_COLUMNS-1];
+    reg signed [15:0]pose_x_a;
+    reg signed [15:0]pose_y_a;
+    reg [7:0]        pose_dir_a;
+    reg signed [15:0]pose_x_b;
+    reg signed [15:0]pose_y_b;
+    reg [7:0]        pose_dir_b;
     reg      valid_a;
     reg      valid_b;
     reg      front_select;   // 0: display A, 1: display B
@@ -120,6 +137,12 @@ module Raycast_3D_Engine
             hit_distance  <= 10'd0;
             hit_u         <= 4'd0;
             hit_ew        <= 1'b0;
+            pose_x_a      <= 16'sd0;
+            pose_y_a      <= 16'sd0;
+            pose_dir_a    <= 8'd0;
+            pose_x_b      <= 16'sd0;
+            pose_y_b      <= 16'sd0;
+            pose_dir_b    <= 8'd0;
             valid_a       <= 1'b0;
             valid_b       <= 1'b0;
             front_select  <= 1'b0;
@@ -135,6 +158,8 @@ module Raycast_3D_Engine
                 wall_ew_a[i]     <= 1'b0;
                 wall_u_b[i]      <= 4'd0;
                 wall_ew_b[i]     <= 1'b0;
+                wall_dist_a[i] <= 8'd0;
+                wall_dist_b[i] <= 8'd0;
             end
         end else begin
             case (render_state)
@@ -152,6 +177,19 @@ module Raycast_3D_Engine
                     ray_dir      <= view_dir + ray_angle_offset(ray_column);
                     ray_steps    <= 8'd0;
                     render_state <= RC_MARCH;
+
+                    // Pose this buffer is rendered from
+                    if (ray_column == 7'd0) begin
+                        if (render_target == 1'b0) begin
+                            pose_x_a   <= player_x;
+                            pose_y_a   <= player_y;
+                            pose_dir_a <= view_dir;
+                        end else begin
+                            pose_x_b   <= player_x;
+                            pose_y_b   <= player_y;
+                            pose_dir_b <= view_dir;
+                        end
+                    end
                 end
 
                 RC_MARCH: begin
@@ -174,12 +212,14 @@ module Raycast_3D_Engine
                         wall_shade_a[ray_column]  <= wall_shade_for_distance(hit_distance);
                         wall_u_a[ray_column]      <= hit_u;
                         wall_ew_a[ray_column]     <= hit_ew;
+                        wall_dist_a[ray_column]   <= hit_distance[7:0];
                     end else begin
                         wall_top_b[ray_column]    <= 6'd32 - wall_half_height(hit_distance);
                         wall_bottom_b[ray_column] <= 6'd31 + wall_half_height(hit_distance);
                         wall_shade_b[ray_column]  <= wall_shade_for_distance(hit_distance);
                         wall_u_b[ray_column]      <= hit_u;
                         wall_ew_b[ray_column]     <= hit_ew;
+                        wall_dist_b[ray_column]   <= hit_distance[7:0];
                     end
 
                     if (ray_column == RAY_COLUMNS-1) begin
@@ -223,6 +263,16 @@ module Raycast_3D_Engine
     reg       selected_valid;
     reg [3:0] selected_u;
     reg       selected_ew;
+    
+    reg [7:0] selected_dist;
+
+    wire [7:0] centre_wall_dist =
+        front_select ? wall_dist_b[7'd48] : wall_dist_a[7'd48];
+
+    // Pose of the buffer on screen
+    wire signed [15:0] display_x   = front_select ? pose_x_b   : pose_x_a;
+    wire signed [15:0] display_y   = front_select ? pose_y_b   : pose_y_a;
+    wire        [7:0]  display_dir = front_select ? pose_dir_b : pose_dir_a;
 
     // A texel is a vertical texture coordinate
     // It is how far down the wall the current pixel is, in terms of the preset wall texture
@@ -238,6 +288,29 @@ module Raycast_3D_Engine
     wire [14:0] tex_scaled = tex_rows * tex_step;
     wire [3:0]  tex_v      = tex_scaled[11:8];
 
+    wire        sprite_hit;
+    wire [15:0] sprite_colour;
+    sprite_billboard sprite (
+        .clk        (clk),
+        .reset      (reset),
+        .cam_x      (display_x),
+        .cam_y      (display_y),
+        .cam_dir    (display_dir),
+        .spr_enable (spr_enable),
+        .spr_obj    (spr_obj),
+        .spr_x      (spr_x),
+        .spr_y      (spr_y),
+        .spr_facing (spr_facing),
+        .pixel_x    (pixel_x),
+        .pixel_y    (pixel_y),
+        .wall_dist  (selected_dist),
+        .lit        (1'b0),
+        .centre_wall_dist (centre_wall_dist),
+        .hit        (sprite_hit),
+        .colour     (sprite_colour),
+        .crosshair_hit (crosshair_hit)
+    );
+
     always @(*) begin
         if (front_select == 1'b0) begin
             selected_top    = wall_top_a[display_column];
@@ -246,6 +319,7 @@ module Raycast_3D_Engine
             selected_valid  = valid_a;
             selected_u      = wall_u_a[display_column];
             selected_ew     = wall_ew_a[display_column];
+            selected_dist   = wall_dist_a[display_column];
         end else begin
             selected_top    = wall_top_b[display_column];
             selected_bottom = wall_bottom_b[display_column];
@@ -253,10 +327,13 @@ module Raycast_3D_Engine
             selected_valid  = valid_b;
             selected_u      = wall_u_b[display_column];
             selected_ew     = wall_ew_b[display_column];
+            selected_dist   = wall_dist_b[display_column];
         end
 
         if (!selected_valid)
             pixel_data = 16'h0000;
+        else if (sprite_hit)
+            pixel_data = sprite_colour;
         else if (pixel_y < selected_top)
             pixel_data = 16'h0005; // Dark blue ceiling
         else if (pixel_y > selected_bottom)
