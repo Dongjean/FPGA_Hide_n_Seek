@@ -120,10 +120,10 @@ module My_Top_Module (
     wire [1:0]         cap_fade_valid;
     wire [6:0]         cap_fade_cell0, cap_fade_cell1;
 
-    // timer + ammo/uses (placeholders until Isaac's timer / the team's counters)
+    // timer (placeholder until Isaac's) + ammo/uses per role
     wire [8:0]         seconds_left;
-    wire [2:0]         ammo;
-    wire [1:0]         uses;
+    wire [3:0]         ammo;                 // 0..10 (Seeker pistol) / 0..5 (Freeze Gun)
+    wire [2:0]         uses;                 // 0..5 (Pinger / Flashbang)
     wire               fired_gun;
 
     world_top #(.LOOP_WALLS(3)) world (
@@ -162,8 +162,8 @@ module My_Top_Module (
         .seeker_cell   (seeker_cell)
     );
 
-    // ---- Warp Portals: placed after each maze, teleport on bump ----
-    portal_ctrl portals (
+    // ---- Warp Portals: 1 pair per maze (border or inner wall), teleport on bump ----
+    portal_ctrl #(.NUM_PAIRS(1)) portals (
         .clk           (oled_clk),
         .reset         (reset_game),
         .start         (gen_start),
@@ -238,15 +238,16 @@ module My_Top_Module (
         .time_up           ()                 // game logic (Dongjin): Hider wins at 0
     );
 
-    // ---- Ammo / item uses (PLACEHOLDER until the team decides the owner) ----
-    // Shown on the HUD and used to block capsule shots when empty.  Jian Bin's
-    // multiplayer_core does not check them yet, so player shots still work at 0.
+    // ---- Ammo / item uses per role, no recharge ----
+    // Seeker: pistol 10, Pinger 5.  Hider: Freeze Gun 5, Flashbang 5.
+    // Shown on the HUD.  Jian Bin's multiplayer_core does not check has_ammo /
+    // has_use yet, so shots and items still work at 0 until it does.
     item_counters items (
         .clk          (oled_clk),
         .reset        (reset_game),
         .start        (start_game),
         .in_game      (in_game),
-        .game_paused  (game_paused),
+        .is_hider     (is_hider),
         .shoot        (shoot),
         .weapon_sel   (weapon_sel),
         .can_move     (can_move),
@@ -452,7 +453,7 @@ module My_Top_Module (
         .in_minimap     (in_minimap)
     );
 
-    // Right strip (x = 64..95): weapon, ammo/uses, HP, time
+    // Right strip (x = 64..95): weapon, ammo/uses, hearts or bullet pips, time
     wire [15:0] hud_pixel;
     hud_render hud (
         .clk          (oled_clk),
@@ -462,7 +463,7 @@ module My_Top_Module (
         .weapon_sel   (weapon_sel),
         .ammo         (ammo),
         .uses         (uses),
-        .health       (my_health),
+        .health       (my_health),           // Hider hearts (0..100 scaled until 3 HP)
         .seconds_left (seconds_left),
         .pixel_data   (hud_pixel),
         .in_hud       ()
