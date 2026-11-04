@@ -4,9 +4,9 @@
 //
 // Screen area: x = 64..95 (32 px wide), y = 0..63, black background.
 // Layout (rx = x - 64):
-//   y  2..17  weapon icon, 8x8 ROM drawn at 2x (16x16) at rx 8..23
-//             Seeker gun = red pistol      Seeker item = cyan Radio Pinger
-//             Hider gun  = blue snowflake  Hider item  = green Stim cross
+//   y  2..17  weapon icon, 16x16 ROM (2 bits per pixel, 2 colours) at rx 8..23
+//             Seeker gun = red pistol      Seeker item = green radar (Radio Pinger)
+//             Hider gun  = blue snowflake  Hider item  = white crossed-out eye (Flashbang)
 //   y 21..30  count for that weapon (bullets 0..5, or item uses 0..3),
 //             3x5 font at 2x (6x10) at rx 13..18; white, red at 0
 //   y 35..40  HP bar: 5 segments (rx 2..30), one per 20 HP (rounded up);
@@ -44,11 +44,13 @@ module hud_render
     localparam [15:0] C_CYAN   = 16'h07FF;
     localparam [15:0] C_ICE    = 16'h5D1F;   // r11 g40 b31, light blue
     localparam [15:0] C_DGREY  = 16'h2104;   // r4 g8 b4, unlit HP segment
+    localparam [15:0] C_RADAR  = 16'h7FEA;   // r15 g63 b10, bright radar green
+    localparam [15:0] C_RADARD = 16'h1A83;   // r3 g20 b3, dark radar disc
 
     // =====================================================================
     // Registered game-state values (change slowly, so 1 clock late is fine)
     // =====================================================================
-    reg  [1:0]  icon;          // {is_hider, item}: 0 seeker gun, 1 pinger, 2 freeze gun, 3 stim
+    reg  [1:0]  icon;          // {is_hider, item}: 0 seeker gun, 1 pinger, 2 freeze gun, 3 flashbang
     reg  [3:0]  count;         // digit shown under the icon
     reg  [2:0]  hp_segs;       // lit HP segments 0..5
     reg  [3:0]  t_min, t_ten, t_one;
@@ -80,50 +82,108 @@ module hud_render
     // =====================================================================
     // ROMs
     // =====================================================================
-    // 8x8 icons: row r is bits [63-8r -: 8], bit 7 of a row = leftmost pixel
-    function [63:0] icon_rom (input [1:0] i);
-        case (i)
-            2'd0: icon_rom = {8'b00000000,     // Seeking Gun: pistol pointing right
-                              8'b11111110,
-                              8'b11111111,
-                              8'b11110000,
-                              8'b11100000,
-                              8'b11000000,
-                              8'b11000000,
-                              8'b00000000};
-            2'd1: icon_rom = {8'b00011000,     // Radio Pinger: waves over a mast
-                              8'b00100100,
-                              8'b01011010,
-                              8'b10100101,
-                              8'b00011000,
-                              8'b00011000,
-                              8'b00011000,
-                              8'b00111100};
-            2'd2: icon_rom = {8'b00010000,     // Freeze Gun: snowflake
-                              8'b01010100,
-                              8'b00111000,
-                              8'b11111110,
-                              8'b00111000,
-                              8'b01010100,
-                              8'b00010000,
-                              8'b00000000};
-            default: icon_rom = {8'b00011000,  // Stim Shot: medical cross
-                              8'b00011000,
-                              8'b00011000,
-                              8'b11111111,
-                              8'b11111111,
-                              8'b00011000,
-                              8'b00011000,
-                              8'b00011000};
-        endcase
+    // 16x16 icons, 2 bits per pixel: 00 off, 01 main colour, 10 second colour.
+    // Row 0 is the top 32 bits; in a row, the leftmost pixel is the top 2 bits.
+    // 0: Seeking Gun: red pistol (8x8 drawn doubled)
+    localparam [511:0] ICON0 = {
+        32'b00000000000000000000000000000000,   // row  0                  
+        32'b00000000000000000000000000000000,   // row  1                  
+        32'b01010101010101010101010101010000,   // row  2  ##############  
+        32'b01010101010101010101010101010000,   // row  3  ##############  
+        32'b01010101010101010101010101010101,   // row  4  ################
+        32'b01010101010101010101010101010101,   // row  5  ################
+        32'b01010101010101010000000000000000,   // row  6  ########        
+        32'b01010101010101010000000000000000,   // row  7  ########        
+        32'b01010101010100000000000000000000,   // row  8  ######          
+        32'b01010101010100000000000000000000,   // row  9  ######          
+        32'b01010101000000000000000000000000,   // row 10  ####            
+        32'b01010101000000000000000000000000,   // row 11  ####            
+        32'b01010101000000000000000000000000,   // row 12  ####            
+        32'b01010101000000000000000000000000,   // row 13  ####            
+        32'b00000000000000000000000000000000,   // row 14                  
+        32'b00000000000000000000000000000000   // row 15                  
+    };
+    // 1: Radio Pinger: radar (1 = bright green line, 2 = dark green disc)
+    localparam [511:0] ICON1 = {
+        32'b00000000000101010101010000000000,   // row  0       ######     
+        32'b00000001011010011010100101000000,   // row  1     ##++#+++##   
+        32'b00000110101010011010100110010000,   // row  2    #++++#+++#+#  
+        32'b00011010101010011010010101010100,   // row  3   #+++++#++##### 
+        32'b00010101101001010101010101010100,   // row  4   ###++######### 
+        32'b01100101100110011001010101101001,   // row  5  #+##+#+#+####++#
+        32'b01101010011010011001010110101001,   // row  6  #+++#++#+###+++#
+        32'b01101010011010010110100110101001,   // row  7  #+++#++##++#+++#
+        32'b01010101010101010101010101010101,   // row  8  ################
+        32'b01101010011010011010100110101001,   // row  9  #+++#++#+++#+++#
+        32'b01101010100110011010010110101001,   // row 10  #++++#+#++##+++#
+        32'b00011010101001010101010110100100,   // row 11   #++++######++# 
+        32'b00011010101010011010101010100100,   // row 12   #+++++#++++++# 
+        32'b00000110101010011010101010010000,   // row 13    #++++#+++++#  
+        32'b00000001011010011010100101000000,   // row 14     ##++#+++##   
+        32'b00000000000101010101010000000000   // row 15       ######     
+    };
+    // 2: Freeze Gun: light-blue snowflake (8x8 drawn doubled)
+    localparam [511:0] ICON2 = {
+        32'b00000000000001010000000000000000,   // row  0        ##        
+        32'b00000000000001010000000000000000,   // row  1        ##        
+        32'b00000101000001010000010100000000,   // row  2    ##  ##  ##    
+        32'b00000101000001010000010100000000,   // row  3    ##  ##  ##    
+        32'b00000000010101010101000000000000,   // row  4      ######      
+        32'b00000000010101010101000000000000,   // row  5      ######      
+        32'b01010101010101010101010101010000,   // row  6  ##############  
+        32'b01010101010101010101010101010000,   // row  7  ##############  
+        32'b00000000010101010101000000000000,   // row  8      ######      
+        32'b00000000010101010101000000000000,   // row  9      ######      
+        32'b00000101000001010000010100000000,   // row 10    ##  ##  ##    
+        32'b00000101000001010000010100000000,   // row 11    ##  ##  ##    
+        32'b00000000000001010000000000000000,   // row 12        ##        
+        32'b00000000000001010000000000000000,   // row 13        ##        
+        32'b00000000000000000000000000000000,   // row 14                  
+        32'b00000000000000000000000000000000   // row 15                  
+    };
+    // 3: Flashbang: white crossed-out eye
+    localparam [511:0] ICON3 = {
+        32'b00000000000000000000000000000000,   // row  0                  
+        32'b00010100000000000000000000000000,   // row  1   ##             
+        32'b00000101000000000000000000000000,   // row  2    ##            
+        32'b00000001010101010101010000000000,   // row  3     ########     
+        32'b00000000010100000000000101000000,   // row  4      ##     ##   
+        32'b00000100000101010101000000010000,   // row  5    #  #####   #  
+        32'b00010000000001010101010000000100,   // row  6   #    #####   # 
+        32'b01000000010100010101010100000001,   // row  7  #   ## #####   #
+        32'b01000000010101000101010100000001,   // row  8  #   ### ####   #
+        32'b00010000000101010001010000000100,   // row  9   #   ### ##   # 
+        32'b00000100000001010100010100010000,   // row 10    #   ### ## #  
+        32'b00000001010000000000000101000000,   // row 11     ##      ##   
+        32'b00000000000101010101010001010000,   // row 12       ###### ##  
+        32'b00000000000000000000000000010100,   // row 13               ## 
+        32'b00000000000000000000000000000100,   // row 14                # 
+        32'b00000000000000000000000000000000   // row 15                  
+    };
+
+    // Pixel (row, col) of icon i: bits [511 - 2*(16*row + col) -: 2]
+    function [1:0] icon_px (input [1:0] i, input [3:0] row, input [3:0] col);
+        reg [511:0] bits;
+        reg [8:0]   pos;                 // 2 * (16*row + col)
+        begin
+            case (i)
+                2'd0:    bits = ICON0;
+                2'd1:    bits = ICON1;
+                2'd2:    bits = ICON2;
+                default: bits = ICON3;
+            endcase
+            pos     = {row, col, 1'b0};
+            icon_px = bits[511 - pos -: 2];
+        end
     endfunction
 
-    function [15:0] icon_colour (input [1:0] i);
+    // Colour of a lit icon pixel: v = 01 main, 10 second (only the radar uses it)
+    function [15:0] icon_colour (input [1:0] i, input [1:0] v);
         case (i)
             2'd0:    icon_colour = C_RED;
-            2'd1:    icon_colour = C_CYAN;
+            2'd1:    icon_colour = (v == 2'b10) ? C_RADARD : C_RADAR;
             2'd2:    icon_colour = C_ICE;
-            default: icon_colour = C_GREEN;
+            default: icon_colour = C_WHITE;
         endcase
     endfunction
 
@@ -164,12 +224,12 @@ module hud_render
     wire [4:0] rx = pixel_x[4:0];          // 0..31 inside the HUD (pixel_x - 64)
     wire [5:0] ry = pixel_y;
 
-    // ---- Icon: rx 8..23, ry 2..17, 2x scale ----
+    // ---- Icon: rx 8..23, ry 2..17, 1x scale (16x16) ----
     wire       in_icon = (rx >= 5'd8) && (rx <= 5'd23) && (ry >= 6'd2) && (ry <= 6'd17);
-    wire [2:0] ic_col  = (rx - 5'd8) >> 1;         // 0..7
-    wire [2:0] ic_row  = (ry - 6'd2) >> 1;
-    wire [63:0] ic_bits = icon_rom(icon);
-    wire       icon_on = in_icon && ic_bits[63 - {ic_row, 3'b000} - ic_col];
+    wire [4:0] ic_c5   = rx - 5'd8;                // 0..15 inside the icon
+    wire [5:0] ic_r6   = ry - 6'd2;
+    wire [1:0] ic_v    = icon_px(icon, ic_r6[3:0], ic_c5[3:0]);
+    wire       icon_on = in_icon && (ic_v != 2'b00);
 
     // ---- Count digit: rx 13..18, ry 21..30 ----
     wire       in_cnt  = (rx >= 5'd13) && (rx <= 5'd18) && (ry >= 6'd21) && (ry <= 6'd30);
@@ -200,7 +260,7 @@ module hud_render
     // =====================================================================
     always @(*) begin
         if (!in_hud)       pixel_data = C_BLACK;
-        else if (icon_on)  pixel_data = icon_colour(icon);
+        else if (icon_on)  pixel_data = icon_colour(icon, ic_v);
         else if (cnt_on)   pixel_data = (count == 4'd0) ? C_RED : C_WHITE;
         else if (in_hp)    pixel_data = hp_lit ? hp_colour : C_DGREY;
         else if (time_on)  pixel_data = t_low ? C_RED : C_WHITE;

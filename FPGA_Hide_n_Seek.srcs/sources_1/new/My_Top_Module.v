@@ -441,7 +441,8 @@ module My_Top_Module (
         .pinger_active  (reveal_active && opp_visible),  // Pinger blip, unless flashbanged
         .rx_hider_x     (reveal_x),
         .rx_hider_y     (reveal_y),
-        .opp_show       (in_game && opp_visible),        // opponent dot, unless flashbanged
+        .opp_show       (in_game && is_hider),           // Hider always sees the Seeker; the Seeker
+                                                         // only sees the Hider via the Pinger blip
         .opp_x          (op_x),              // other board's player, or the bot in solo
         .opp_y          (op_y),
         .cap_fade_valid (cap_fade_valid),    // capsule blinks in its last 5 s
