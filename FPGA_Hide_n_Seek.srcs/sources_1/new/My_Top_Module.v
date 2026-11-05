@@ -162,9 +162,9 @@ module My_Top_Module (
         .load_x        (load_x),
         .load_y        (load_y),
         .load_dir      (load_dir),
-        .opp_x         (op_x),
-        .opp_y         (op_y),
-        .opp_dir       (op_dir),
+        .opp_x         (),
+        .opp_y         (),
+        .opp_dir       (),
         .opp_spawn_x   (bot_spawn_x),        // valid 1 cycle after start: in time for the bot
         .opp_spawn_y   (bot_spawn_y),
         .hider_cell    (hider_cell),
@@ -328,8 +328,45 @@ module My_Top_Module (
         .an              (an)
     );
 
+    // ================= Player state FSM (stun / flashbang / attacked) =================
+    // state 0 normal | 1 stunned (no move/turn) | 2 flashed (both screens white 2 s)
+    // | 3 attacked (main screen red flash).  Entry point = ps_set_valid / ps_set_state.
+    // Game logic / the link will drive these later.
+    wire [1:0] player_state;
+    wire       state_can_act, screen_white, screen_red;
+    wire       ps_set_valid;
+    wire [1:0] ps_set_state;
+
+    // DEBUG entry point (replace with game logic / packet_receiver events):
+    //   sw[3:2] = state to enter, rising edge of sw[4] = trigger it.
+    //   (sw[3:2] = 0 + trigger = cancel.)
+    reg dbg_trig_prev = 1'b0;
+    always @(posedge oled_clk) dbg_trig_prev <= sw[4];
+    assign ps_set_valid = sw[4] && !dbg_trig_prev;
+    assign ps_set_state = sw[3:2];
+
+    player_state_FSM player_state_fsm (
+        .clk          (oled_clk),
+        .reset        (reset_game || start_game),
+        .game_paused  (game_paused),
+        .set_valid    (ps_set_valid),
+        .set_state    (ps_set_state),
+        .state        (player_state),
+        .can_act      (state_can_act),
+        .screen_white (screen_white),
+        .screen_red   (screen_red)
+    );
+
     // Decide what to display based on the game state
-    assign pixel_data = (game_state == STATE_PLAYING) ? game_pixel_data : ui_pixel_data;
+    wire [15:0] base_pixel = (game_state == STATE_PLAYING) ? game_pixel_data : ui_pixel_data;
+    
+    // red_pixel is when attacked
+    // Push red up, halve green/blue to have a red filter effect
+    wire [15:0] red_pixel  = {base_pixel[15:11] | 5'b11000, 1'b0, base_pixel[10:6], 1'b0, base_pixel[4:1]};
+    
+    // When flashed, solid white screen
+    assign pixel_data = screen_white ? 16'hFFFF :
+                        screen_red   ? red_pixel : base_pixel;
     
     // Oled Display module
     Oled_Display oled_display (
@@ -369,11 +406,6 @@ module My_Top_Module (
         .pixel_index (pixel_index),
         .pixel_data  (ui_pixel_data)
     );
-
-    // Player location in Q8.8 units.  Start at the centre of grid square
-    wire signed [15:0]player_x;
-    wire signed [15:0]player_y;
-    wire [7:0]view_dir;
 
     localparam [99:0] DEFAULT_MAP = {
         10'b1111111111,
@@ -435,7 +467,7 @@ module My_Top_Module (
         .btn_backward (move_backward),
         .btn_left     (turn_left),
         .btn_right    (turn_right),
-        .frame_begin  (frame_begin && can_move),
+        .frame_begin  (frame_begin && can_move && state_can_act),
         .map_bits     (map_bits),
         .load_pos     (load_pos | tp_load),
         .load_x       (load_pos ? load_x   : tp_x),
@@ -532,7 +564,9 @@ module My_Top_Module (
         .in_hud       ()
     );
 
-    assign pixel_data2 = in_minimap ? minimap_pixel : hud_pixel;
+//    assign pixel_data2 = in_minimap ? minimap_pixel : hud_pixel;
+
+    assign pixel_data2 = screen_white ? 16'hFFFF : (in_minimap ? minimap_pixel : hud_pixel);
 
 //    // Enemy Player Movement Module
 //    player_movement #(
