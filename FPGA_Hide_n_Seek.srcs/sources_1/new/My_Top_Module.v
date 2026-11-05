@@ -31,6 +31,19 @@ module My_Top_Module (
     input link_rx
 );
 
+    localparam [99:0] DEFAULT_MAP = {
+        10'b1111111111,
+        10'b1010001001,
+        10'b1010001001,
+        10'b1010011001,
+        10'b1010010001,
+        10'b1000000001,
+        10'b1100011001,
+        10'b1000010001,
+        10'b1000010001,
+        10'b1111111111
+    };
+
     wire oled_clk;
     clk_6p25m oled_clk_gen (.clk(clk), .slow_clk(oled_clk));
     
@@ -406,20 +419,6 @@ module My_Top_Module (
         .pixel_index (pixel_index),
         .pixel_data  (ui_pixel_data)
     );
-
-    localparam [99:0] DEFAULT_MAP = {
-        10'b1111111111,
-        10'b1010001001,
-        10'b1010001001,
-        10'b1010011001,
-        10'b1010010001,
-        10'b1000000001,
-        10'b1100011001,
-        10'b1000010001,
-        10'b1000010001,
-        10'b1111111111
-    };
-    wire [99:0] map_bits = DEFAULT_MAP;
 
     // ---- Sprite, shots, ornaments (Isaac) ----
     // Seeker sees the Hider as a room object (from the seed), Hider sees the hunter
