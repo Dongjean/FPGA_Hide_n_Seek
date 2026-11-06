@@ -93,6 +93,7 @@ module My_Top_Module (
     wire menu_confirmed, peer_confirmed, is_master;
     wire time_up;                           // match_timer -> Hider wins
     wire crosshair_hit;                     // renderer: other player under the crosshair
+    wire sprite_visible;                    // renderer: other player is visibly drawn on-screen
     wire got_state_change;                  // link -> player_state_FSM
     wire [1:0]got_player_state;
     wire my_stunned;
@@ -375,19 +376,21 @@ module My_Top_Module (
     wire [1:0] ps_set_state;
  
     // Entry point: the other player's actions, from the link (or the bot in solo)
-    assign ps_set_valid = got_state_change;
+//    assign ps_set_valid = got_state_change;
+    assign ps_set_valid = got_state_change &&
+                      ((got_player_state != 2'd2) || sprite_visible); // Only flashbang if the flashed is looking at the flasher
     assign ps_set_state = got_player_state;
     
     player_state_FSM player_state_fsm (
-        .clk          (oled_clk),
-        .reset        (reset_game || start_game),
-        .game_paused  (game_paused),
-        .set_valid    (ps_set_valid),
-        .set_state    (ps_set_state),
-        .state        (player_state),
-        .can_act      (state_can_act),
-        .screen_white (screen_white),
-        .screen_red   (screen_red)
+        .clk            (oled_clk),
+        .reset          (reset_game || start_game),
+        .game_paused    (game_paused),
+        .set_valid      (ps_set_valid),
+        .set_state      (ps_set_state),
+        .state          (player_state),
+        .can_act        (state_can_act),
+        .screen_white   (screen_white),
+        .screen_red     (screen_red)
     );
     assign my_stunned = !state_can_act;     // -> multiplayer_core: no moving or shooting
 
@@ -504,6 +507,7 @@ module My_Top_Module (
         .spr_y       (op_y),
         .spr_facing  (op_dir),
         .crosshair_hit (crosshair_hit), // This is the output that decides if a crosshair is on an enemy
+        .sprite_visible (sprite_visible),
         .pixel_data  (game_pixel_data)
     );
  
