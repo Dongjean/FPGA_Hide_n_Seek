@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// Menu and end screens on OLED #1.
+// Menu, pause and end screens on OLED #1 (96 x 64).
 //
 // The main menu (state == S_MENU) has two pages, chosen by game_mode:
 //   game_mode == 0  Mode page:  MULTIPLAYER / SINGLEPLAYER (mode_cursor picks the
@@ -15,6 +15,13 @@
 //       - the link is down:       "LINK LOST" / "CHECK CABLE"
 //   End (state == S_END): the same on both boards: "GAME OVER", the winner
 //       ("HIDER" or "SEEKER", then "WON") and "C FOR MENU".
+//
+// One shared text engine draws every screen. Only one screen is shown at a time
+// and no two lines of text share a pixel row, so for each pixel a small table
+// (line_select) picks the line of text on that row: its string (12 characters,
+// padded with spaces), position, size and an id. Then a single divide-by-7 and a
+// single font lookup decide whether the pixel is part of a letter. (Before, each
+// of the 25 lines had its own text_line with its own divider and font lookup.)
 module game_screens
 (
     input  clk,
@@ -24,30 +31,49 @@ module game_screens
     input         game_paused,    // either player paused, or the link is down
     input         i_paused,       // I am the one who paused
     input         link_up,
-    input  [1:0]  game_mode,        // 0 = mode page, 1 = singleplayer, 2 = multiplayer
-    input         mode_cursor,      // mode page: 0 = Multiplayer, 1 = Singleplayer highlighted
-    input         mp_available,     // Multiplayer can be picked
-    input         peer_in_solo,     // the other board chose Singleplayer
-    input  [1:0]  role_pick,        // role page: 1 = Hider, 2 = Seeker highlighted
-    input         role_confirmed,   // role page: confirmed, waiting for the match to start
+    input  [1:0]  game_mode,      // 0 = mode page, 1 = singleplayer, 2 = multiplayer
+    input         mode_cursor,    // mode page: 0 = Multiplayer, 1 = Singleplayer highlighted
+    input         mp_available,   // Multiplayer can be picked
+    input         peer_in_solo,   // the other board chose Singleplayer
+    input  [1:0]  role_pick,      // role page: 1 = Hider, 2 = Seeker highlighted
+    input         role_confirmed, // role page: confirmed, waiting for the match to start
     input  [12:0] pixel_index,
     output reg [15:0] pixel_data
 );
+    `include "font.vh"
+
     localparam [1:0] S_MENU    = 2'd0;
     localparam [1:0] S_PLAYING = 2'd1;
     localparam [1:0] S_END     = 2'd2;
-    
-    localparam [15:0] COL_WHITE  = 16'hFFFF;
-    localparam [15:0] COL_YELLOW = 16'hFFE0;
-    localparam [15:0] COL_GREEN  = 16'h07E0;
-    localparam [15:0] COL_CYAN    = 16'h07FF;
-    localparam [15:0] COL_GREY    = 16'h8410;
-    localparam [15:0] COL_RED     = 16'hF800;
-    localparam [15:0] COL_MENU_BG = 16'h0005; // Dark blue
-    localparam [15:0] COL_END_BG  = 16'h0140; // Dark green
+
+    localparam [15:0] COL_WHITE    = 16'hFFFF;
+    localparam [15:0] COL_YELLOW   = 16'hFFE0;
+    localparam [15:0] COL_GREEN    = 16'h07E0;
+    localparam [15:0] COL_CYAN     = 16'h07FF;
+    localparam [15:0] COL_GREY     = 16'h8410;
+    localparam [15:0] COL_RED      = 16'hF800;
+    localparam [15:0] COL_MENU_BG  = 16'h0005; // Dark blue
+    localparam [15:0] COL_END_BG   = 16'h0140; // Dark green
     localparam [15:0] COL_PAUSE_BG = 16'h2104; // Dark grey
-    localparam [15:0] COL_HIGHLIGHTED_TEXT  = 16'hFFE0; // Neon Yellow
-    localparam [15:0] COL_BAR     = 16'hFFE0; // selection bar behind the highlighted option
+    localparam [15:0] COL_BAR      = 16'hFFE0; // selection bar behind the highlighted option
+
+    // Line ids (which line of text the current pixel row belongs to)
+    localparam [3:0] L_NONE     = 4'd0;
+    localparam [3:0] L_TITLE    = 4'd1;   // mode page: HIDE N SEEK
+    localparam [3:0] L_MULTI    = 4'd2;   // mode page: MULTIPLAYER
+    localparam [3:0] L_SINGLE   = 4'd3;   // mode page: SINGLEPLAYER
+    localparam [3:0] L_MODE_MSG = 4'd4;   // mode page: NO LINK / P2 IN SOLO / C TO SELECT
+    localparam [3:0] L_RT       = 4'd5;   // role page: MULTIPLAYER / SINGLEPLAYER title
+    localparam [3:0] L_CHOOSE   = 4'd6;   // role page: CHOOSE ROLE
+    localparam [3:0] L_ROLES    = 4'd7;   // role page: HIDER and SEEKER
+    localparam [3:0] L_ROLE_MSG = 4'd8;   // role page: STARTING / D BACK C GO
+    localparam [3:0] L_OVER     = 4'd9;   // end: GAME OVER
+    localparam [3:0] L_WINNER   = 4'd10;  // end: HIDER / SEEKER (double size)
+    localparam [3:0] L_WON      = 4'd11;  // end: WON (double size)
+    localparam [3:0] L_MENU     = 4'd12;  // end: C FOR MENU
+    localparam [3:0] L_PAUSED   = 4'd13;  // pause: PAUSED (double size)
+    localparam [3:0] L_PAUSE1   = 4'd14;  // pause: LINK LOST / C TO RESUME / WAITING FOR
+    localparam [3:0] L_PAUSE2   = 4'd15;  // pause: CHECK CABLE / HOLD D: QUIT / OTHER PLAYER
 
     // pixel_index coordinate mapping
     wire [5:0] py = pixel_index / 13'd96;
@@ -58,124 +84,153 @@ module game_screens
     always @(posedge clk)
         if (frame_begin) blink <= blink + 6'd1;
 
-    // Start Menu
     wire mode_page = (game_mode == 2'd0);
     wire multi     = (game_mode == 2'd2);
-    wire [1:0] t_title, t_multi, t_single, t_nolink, t_p2solo, t_select;
-    text_line #(.N(11), .SCALE(1)) title   (.px(px), .py(py), .x0(7'd10), .y0(6'd5),  .str("HIDE N SEEK"),  .highlighted(1'b0), .on(t_title));
-    text_line #(.N(11), .SCALE(1)) mp_txt  (.px(px), .py(py), .x0(7'd10), .y0(6'd22), .str("MULTIPLAYER"),  .highlighted(1'b0), .on(t_multi));
-    text_line #(.N(12), .SCALE(1)) sp_txt  (.px(px), .py(py), .x0(7'd6),  .y0(6'd34), .str("SINGLEPLAYER"), .highlighted(1'b0), .on(t_single));
-    text_line #(.N(7),  .SCALE(1)) nolink  (.px(px), .py(py), .x0(7'd24), .y0(6'd50), .str("NO LINK"),      .highlighted(1'b0), .on(t_nolink));
-    text_line #(.N(10), .SCALE(1)) p2solo  (.px(px), .py(py), .x0(7'd13), .y0(6'd50), .str("P2 IN SOLO"),   .highlighted(1'b0), .on(t_p2solo));
-    text_line #(.N(11), .SCALE(1)) select  (.px(px), .py(py), .x0(7'd10), .y0(6'd50), .str("C TO SELECT"),  .highlighted(1'b0), .on(t_select));
 
-    // Selection bars: 2 px of padding around each option row
+    // ---------------- Which line of text is on this pixel row ----------------
+    reg [95:0] l_str;     // 12 characters, left aligned, padded with spaces
+    reg [6:0]  l_x0;
+    reg [5:0]  l_y0;
+    reg        l_big;     // 1 = double size (14 x 14 pixel characters)
+    reg [3:0]  l_id;
+
+    always @(*) begin
+        l_str = "            ";
+        l_x0  = 7'd0;
+        l_y0  = 6'd0;
+        l_big = 1'b0;
+        l_id  = L_NONE;
+        if (state == S_END) begin
+            if (py >= 6'd6 && py < 6'd13) begin
+                l_id = L_OVER;   l_x0 = 7'd16; l_y0 = 6'd6;  l_str = "GAME OVER   ";
+            end else if (py >= 6'd17 && py < 6'd31) begin
+                l_id = L_WINNER; l_y0 = 6'd17; l_big = 1'b1;
+                if (winner == 2'd2) begin l_x0 = 7'd6;  l_str = "SEEKER      "; end
+                else                begin l_x0 = 7'd13; l_str = "HIDER       "; end
+            end else if (py >= 6'd33 && py < 6'd47) begin
+                l_id = L_WON;    l_x0 = 7'd27; l_y0 = 6'd33; l_big = 1'b1; l_str = "WON         ";
+            end else if (py >= 6'd51 && py < 6'd58) begin
+                l_id = L_MENU;   l_x0 = 7'd13; l_y0 = 6'd51; l_str = "C FOR MENU  ";
+            end
+        end else if (state == S_PLAYING) begin
+            if (py >= 6'd8 && py < 6'd22) begin
+                l_id = L_PAUSED; l_x0 = 7'd6;  l_y0 = 6'd8;  l_big = 1'b1; l_str = "PAUSED      ";
+            end else if (py >= 6'd32 && py < 6'd39) begin
+                l_id = L_PAUSE1; l_y0 = 6'd32;
+                if (!link_up)      begin l_x0 = 7'd16; l_str = "LINK LOST   "; end
+                else if (i_paused) begin l_x0 = 7'd10; l_str = "C TO RESUME "; end
+                else               begin l_x0 = 7'd10; l_str = "WAITING FOR "; end
+            end else if (link_up && i_paused) begin
+                if (py >= 6'd46 && py < 6'd53) begin
+                    l_id = L_PAUSE2; l_x0 = 7'd6; l_y0 = 6'd46; l_str = "HOLD D: QUIT";
+                end
+            end else if (py >= 6'd44 && py < 6'd51) begin
+                l_id = L_PAUSE2; l_y0 = 6'd44;
+                if (!link_up) begin l_x0 = 7'd10; l_str = "CHECK CABLE "; end
+                else          begin l_x0 = 7'd6;  l_str = "OTHER PLAYER"; end
+            end
+        end else if (mode_page) begin
+            if (py >= 6'd5 && py < 6'd12) begin
+                l_id = L_TITLE;  l_x0 = 7'd10; l_y0 = 6'd5;  l_str = "HIDE N SEEK ";
+            end else if (py >= 6'd22 && py < 6'd29) begin
+                l_id = L_MULTI;  l_x0 = 7'd10; l_y0 = 6'd22; l_str = "MULTIPLAYER ";
+            end else if (py >= 6'd34 && py < 6'd41) begin
+                l_id = L_SINGLE; l_x0 = 7'd6;  l_y0 = 6'd34; l_str = "SINGLEPLAYER";
+            end else if (py >= 6'd50 && py < 6'd57) begin
+                l_id = L_MODE_MSG; l_y0 = 6'd50;
+                if (!link_up)          begin l_x0 = 7'd24; l_str = "NO LINK     "; end
+                else if (peer_in_solo) begin l_x0 = 7'd13; l_str = "P2 IN SOLO  "; end
+                else                   begin l_x0 = 7'd10; l_str = "C TO SELECT "; end
+            end
+        end else begin
+            if (py >= 6'd5 && py < 6'd12) begin
+                l_id = L_RT; l_y0 = 6'd5;
+                if (multi) begin l_x0 = 7'd10; l_str = "MULTIPLAYER "; end
+                else       begin l_x0 = 7'd6;  l_str = "SINGLEPLAYER"; end
+            end else if (py >= 6'd18 && py < 6'd25) begin
+                l_id = L_CHOOSE; l_x0 = 7'd10; l_y0 = 6'd18; l_str = "CHOOSE ROLE ";
+            end else if (py >= 6'd34 && py < 6'd41) begin
+                // HIDER at x = 6 and SEEKER at x = 48 share one line
+                l_id = L_ROLES;  l_x0 = 7'd6;  l_y0 = 6'd34; l_str = "HIDER SEEKER";
+            end else if (py >= 6'd50 && py < 6'd57) begin
+                l_id = L_ROLE_MSG; l_y0 = 6'd50;
+                if (role_confirmed) begin l_x0 = 7'd20; l_str = "STARTING    "; end
+                else                begin l_x0 = 7'd10; l_str = "D BACK C GO "; end
+            end
+        end
+    end
+
+    // ---------------- The shared text engine ----------------
+    wire [6:0] dx  = px - l_x0;                          // used only when px >= l_x0
+    wire [5:0] dy  = py - l_y0;
+    wire [6:0] dxs = l_big ? {1'b0, dx[6:1]} : dx;       // undo the double size
+    wire [2:0] row = l_big ? dy[3:1] : dy[2:0];          // 0..6 inside the line
+    wire [3:0] idx = dxs / 7'd7;                         // character number
+    wire [2:0] col = dxs - idx * 7'd7;                   // 0 = gap, 1..5 = glyph, 6 = gap
+
+    reg [7:0]  ch;
+    reg [34:0] bits;
+    reg        txt;                                      // this pixel is part of a letter
+    always @(*) begin
+        ch   = (idx < 4'd12) ? l_str[8*(11-idx) +: 8] : " ";
+        bits = glyph_bits(ch);
+        txt  = (l_id != L_NONE) && (px >= l_x0) && (idx < 4'd12) &&
+               (col != 3'd0) && (col != 3'd6) && bits[34 - (row * 5) + 1 - col];
+    end
+
+    // ---------------- Bars, border and colours ----------------
     wire row_mp = (py >= 6'd20) && (py <= 6'd30);
     wire row_sp = (py >= 6'd32) && (py <= 6'd42);
     wire bar_x  = (px >= 7'd4) && (px <= 7'd91);
     wire bar_mp = bar_x && row_mp && !mode_cursor && mp_available;
     wire bar_sp = bar_x && row_sp &&  mode_cursor;
 
-    // ---------------- Role page ----------------
-    wire [1:0] t_rt_mp, t_rt_sp, t_choose, t_hider, t_seeker, t_back, t_starting;
-    text_line #(.N(11), .SCALE(1)) rt_mp    (.px(px), .py(py), .x0(7'd10), .y0(6'd5),  .str("MULTIPLAYER"),  .highlighted(1'b0), .on(t_rt_mp));
-    text_line #(.N(12), .SCALE(1)) rt_sp    (.px(px), .py(py), .x0(7'd6),  .y0(6'd5),  .str("SINGLEPLAYER"), .highlighted(1'b0), .on(t_rt_sp));
-    text_line #(.N(11), .SCALE(1)) choose   (.px(px), .py(py), .x0(7'd10), .y0(6'd18), .str("CHOOSE ROLE"),  .highlighted(1'b0), .on(t_choose));
-    text_line #(.N(5),  .SCALE(1)) hider    (.px(px), .py(py), .x0(7'd8),  .y0(6'd34), .str("HIDER"),        .highlighted(1'b0), .on(t_hider));
-    text_line #(.N(6),  .SCALE(1)) seeker   (.px(px), .py(py), .x0(7'd48), .y0(6'd34), .str("SEEKER"),       .highlighted(1'b0), .on(t_seeker));
-    text_line #(.N(11), .SCALE(1)) back     (.px(px), .py(py), .x0(7'd10), .y0(6'd50), .str("D BACK C GO"),  .highlighted(1'b0), .on(t_back));
-    text_line #(.N(8),  .SCALE(1)) starting (.px(px), .py(py), .x0(7'd20), .y0(6'd50), .str("STARTING"),     .highlighted(1'b0), .on(t_starting));
-
     wire row_role = (py >= 6'd32) && (py <= 6'd42);
     wire bar_h = row_role && (px >= 7'd5)  && (px <= 7'd44) && (role_pick == 2'd1);
     wire bar_s = row_role && (px >= 7'd46) && (px <= 7'd91) && (role_pick == 2'd2);
-
-    // End text: "GAME OVER", winner, "WON", "C FOR MENU"
-    wire [1:0]t_over;
-    wire [1:0]t_hider;
-    wire [1:0]t_seeker;
-    wire [1:0]t_won;
-    wire [1:0]t_menu;
-    text_line #(.N(9), .SCALE(1)) gameover (.px(px), .py(py), .x0(7'd16), .y0(6'd6),  .str("GAME OVER"),  .highlighted(1'b0), .on(t_over));
-    text_line #(.N(5), .SCALE(2)) hiderw   (.px(px), .py(py), .x0(7'd13), .y0(6'd17), .str("HIDER"),      .highlighted(1'b0), .on(t_hider));
-    text_line #(.N(6), .SCALE(2)) seekerw  (.px(px), .py(py), .x0(7'd6),  .y0(6'd17), .str("SEEKER"),     .highlighted(1'b0), .on(t_seeker));
-    text_line #(.N(3), .SCALE(2)) wonw     (.px(px), .py(py), .x0(7'd27), .y0(6'd33), .str("WON"),        .highlighted(1'b0), .on(t_won));
-    text_line #(.N(10),.SCALE(1)) cformenu (.px(px), .py(py), .x0(7'd13), .y0(6'd51), .str("C FOR MENU"), .highlighted(1'b0), .on(t_menu));
-    wire [1:0]t_winner = (winner == 2'd2) ? t_seeker : t_hider;
-
-    // Pause text
-    wire [1:0]t_paused;
-    wire [1:0]t_resume;
-    wire [1:0]t_quit;
-    wire [1:0]t_waiting;
-    wire [1:0]t_other;
-    wire [1:0]t_lost;
-    wire [1:0]t_cable;
-    text_line #(.N(6), .SCALE(2)) pausedw  (.px(px), .py(py), .x0(7'd6),  .y0(6'd8),  .str("PAUSED"),       .highlighted(1'b0), .on(t_paused));
-    text_line #(.N(11),.SCALE(1)) resume   (.px(px), .py(py), .x0(7'd10), .y0(6'd32), .str("C TO RESUME"),  .highlighted(1'b0), .on(t_resume));
-    text_line #(.N(12),.SCALE(1)) quit     (.px(px), .py(py), .x0(7'd6),  .y0(6'd46), .str("HOLD D: QUIT"), .highlighted(1'b0), .on(t_quit));
-    text_line #(.N(11),.SCALE(1)) waiting  (.px(px), .py(py), .x0(7'd10), .y0(6'd32), .str("WAITING FOR"),  .highlighted(1'b0), .on(t_waiting));
-    text_line #(.N(12),.SCALE(1)) otherp   (.px(px), .py(py), .x0(7'd6),  .y0(6'd44), .str("OTHER PLAYER"), .highlighted(1'b0), .on(t_other));
-    text_line #(.N(9), .SCALE(1)) lost     (.px(px), .py(py), .x0(7'd16), .y0(6'd32), .str("LINK LOST"),    .highlighted(1'b0), .on(t_lost));
-    text_line #(.N(11),.SCALE(1)) cable    (.px(px), .py(py), .x0(7'd10), .y0(6'd44), .str("CHECK CABLE"),  .highlighted(1'b0), .on(t_cable));
+    wire on_hider_word = (px < 7'd46);                   // HIDER half of the role line
 
     wire border = (px < 7'd2) || (px > 7'd93) || (py < 6'd2) || (py > 6'd61);
 
     always @(*) begin
         if (state == S_END) begin
-            // END screen
-            if (border)              pixel_data = COL_GREEN;
-            else if (t_win == 2'd1)  pixel_data = COL_YELLOW;
-            else if (t_menu == 2'd1) pixel_data = COL_WHITE;
-            else if (t_menu == 2'd2) pixel_data = COL_HIGHLIGHTED_TEXT;
-            else                     pixel_data = COL_END_BG;
+            // END screen (same on both boards)
+            if (border)                                   pixel_data = COL_GREEN;
+            else if (txt && l_id == L_OVER)               pixel_data = COL_WHITE;
+            else if (txt && (l_id == L_WINNER || l_id == L_WON)) pixel_data = COL_YELLOW;
+            else if (txt && l_id == L_MENU)               pixel_data = COL_WHITE;
+            else                                          pixel_data = COL_END_BG;
         end else if (state == S_PLAYING) begin
             // PAUSE screen (the top module only shows it while game_paused)
-            if (border)                      pixel_data = COL_YELLOW;
-            else if (t_paused == 2'd1)       pixel_data = COL_YELLOW;
-            else if (!link_up) begin
-                if (t_lost == 2'd1)          pixel_data = COL_RED;
-                else if (t_cable == 2'd1)    pixel_data = COL_WHITE;
-                else                         pixel_data = COL_PAUSE_BG;
-            end else if (i_paused) begin
-                if (t_resume == 2'd1 && blink[5]) pixel_data = COL_YELLOW;   // blinking prompt
-                else if (t_quit == 2'd1)     pixel_data = COL_WHITE;
-                else                         pixel_data = COL_PAUSE_BG;
-            end else begin
-                if (t_waiting == 2'd1 || t_other == 2'd1) pixel_data = COL_WHITE;
-                else                         pixel_data = COL_PAUSE_BG;
-            end
+            if (border)                                   pixel_data = COL_YELLOW;
+            else if (txt && l_id == L_PAUSED)             pixel_data = COL_YELLOW;
+            else if (txt && l_id == L_PAUSE1)             pixel_data = !link_up ? COL_RED :
+                                                                       i_paused ? (blink[5] ? COL_YELLOW : COL_PAUSE_BG) :
+                                                                       COL_WHITE;
+            else if (txt && l_id == L_PAUSE2)             pixel_data = COL_WHITE;
+            else                                          pixel_data = COL_PAUSE_BG;
         end else if (mode_page) begin
             // MENU: mode page
-            // (When state == S_PLAYING, pixel_data wont even display this)
-            if (border)                       pixel_data = COL_YELLOW;
-            else if (t_title == 2'd1)         pixel_data = COL_YELLOW;
-            else if (t_multi == 2'd1)         pixel_data = !mp_available ? COL_GREY :
-                                                           bar_mp ? COL_MENU_BG : COL_WHITE;
-            else if (t_single == 2'd1)        pixel_data = bar_sp ? COL_MENU_BG : COL_WHITE;
-            else if (bar_mp || bar_sp)        pixel_data = COL_BAR;
-            else if (!link_up) begin
-                if (t_nolink == 2'd1)         pixel_data = COL_RED;
-                else                          pixel_data = COL_MENU_BG;
-            end else if (peer_in_solo) begin
-                if (t_p2solo == 2'd1)         pixel_data = COL_GREY;
-                else                          pixel_data = COL_MENU_BG;
-            end else if (t_select == 2'd1 && blink[5]) pixel_data = COL_WHITE;
-            else                              pixel_data = COL_MENU_BG;
+            if (border)                                   pixel_data = COL_YELLOW;
+            else if (txt && l_id == L_TITLE)              pixel_data = COL_YELLOW;
+            else if (txt && l_id == L_MULTI)              pixel_data = !mp_available ? COL_GREY :
+                                                                       bar_mp ? COL_MENU_BG : COL_WHITE;
+            else if (txt && l_id == L_SINGLE)             pixel_data = bar_sp ? COL_MENU_BG : COL_WHITE;
+            else if (bar_mp || bar_sp)                    pixel_data = COL_BAR;
+            else if (txt && l_id == L_MODE_MSG)           pixel_data = !link_up ? COL_RED :
+                                                                       peer_in_solo ? COL_GREY :
+                                                                       (blink[5] ? COL_WHITE : COL_MENU_BG);
+            else                                          pixel_data = COL_MENU_BG;
         end else begin
             // MENU: role page
-            if (border)                              pixel_data = COL_YELLOW;
-            else if (multi  && t_rt_mp == 2'd1)      pixel_data = COL_CYAN;
-            else if (!multi && t_rt_sp == 2'd1)      pixel_data = COL_CYAN;
-            else if (t_choose == 2'd1)               pixel_data = COL_WHITE;
-            else if (t_hider == 2'd1)                pixel_data = bar_h ? COL_MENU_BG : COL_WHITE;
-            else if (t_seeker == 2'd1)               pixel_data = bar_s ? COL_MENU_BG : COL_WHITE;
-            else if (bar_h || bar_s)                 pixel_data = COL_BAR;
-            else if (role_confirmed) begin
-                if (t_starting == 2'd1 && blink[4])  pixel_data = COL_YELLOW;
-                else                                 pixel_data = COL_MENU_BG;
-            end else if (t_back == 2'd1)             pixel_data = COL_GREY;
-            else                                     pixel_data = COL_MENU_BG;
+            if (border)                                   pixel_data = COL_YELLOW;
+            else if (txt && l_id == L_RT)                 pixel_data = COL_CYAN;
+            else if (txt && l_id == L_CHOOSE)             pixel_data = COL_WHITE;
+            else if (txt && l_id == L_ROLES)              pixel_data = (on_hider_word ? bar_h : bar_s) ? COL_MENU_BG : COL_WHITE;
+            else if (bar_h || bar_s)                      pixel_data = COL_BAR;
+            else if (txt && l_id == L_ROLE_MSG)           pixel_data = role_confirmed ? (blink[4] ? COL_YELLOW : COL_MENU_BG) :
+                                                                       COL_GREY;
+            else                                          pixel_data = COL_MENU_BG;
         end
     end
 endmodule
