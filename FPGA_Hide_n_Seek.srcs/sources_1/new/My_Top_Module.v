@@ -91,6 +91,10 @@ module My_Top_Module (
     wire [1:0]my_role;                      // 1 = Hider, 2 = Seeker (menu: highlighted role)
     wire [1:0]menu_pick, winner;            // for the menu / end screens
     wire menu_confirmed, peer_confirmed, is_master;
+    wire [1:0]game_mode;                    // main menu: 0 = mode page, 1 = single, 2 = multi
+    wire solo_mode;                         // Singleplayer chosen: the other player is the AI bot
+    wire mode_cursor, mp_available, peer_in_solo;
+    
     wire time_up;                           // match_timer -> Hider wins
     wire crosshair_hit;                     // renderer: other player under the crosshair
     wire sprite_visible;                    // renderer: other player is visibly drawn on-screen
@@ -100,6 +104,7 @@ module My_Top_Module (
     wire [6:0]mp_seg;                       // multiplayer 7-segment, muxed with the round timer
     wire mp_dp;
     wire [3:0]mp_an;
+    wire map_ready;                         // world_top: map finished (the bot waits for it)
  
     // ================= Andrew: world generation =================
     // A new maze is built on every start_game, from the shared game_seed, so both
@@ -197,7 +202,7 @@ module My_Top_Module (
         .cells         (cells),
         .map_bits      (map_bits),
         .gen_busy      (),
-        .map_ready     (),
+        .map_ready     (map_ready),
         .map_done      (map_done),
         .load_pos      (load_pos),
         .load_x        (load_x),
@@ -248,7 +253,7 @@ module My_Top_Module (
         .seed            (gen_seed),
         .in_game         (in_game),
         .game_paused     (game_paused),
-        .solo_mode       (sw[12]),           // player-distance rule only vs the bot
+        .solo_mode       (solo_mode),           // player-distance rule only vs the bot
         .cells           (cells),
         .hider_cell      (hider_cell),
         .seeker_cell     (seeker_cell),
@@ -339,6 +344,7 @@ module My_Top_Module (
         .bot_spawn_y     (bot_spawn_y),
         .time_up         (time_up),
         .my_stunned      (my_stunned),
+        .map_ready       (map_ready),
         .move_forward    (move_forward),
         .move_backward   (move_backward),
         .turn_left       (turn_left),
@@ -359,6 +365,11 @@ module My_Top_Module (
         .my_role         (my_role),
         .menu_pick       (menu_pick),
         .menu_confirmed  (menu_confirmed),
+        .game_mode       (game_mode),
+        .solo_mode       (solo_mode),
+        .mode_cursor     (mode_cursor),
+        .mp_available    (mp_available),
+        .peer_in_solo    (peer_in_solo),
         .peer_confirmed  (peer_confirmed),
         .is_master       (is_master),
         .winner          (winner),
@@ -384,6 +395,7 @@ module My_Top_Module (
         .my_hand         (my_hand),
         .op_hand         (op_hand),
         .peer_stim_used  (peer_flash),       // the Hider used a Flashbang (Stim event reused)
+        .peer_flash_used (peer_flash),       // the Hider used a Flashbang (Stim event reused)
         .capsule_valid   (capsule_valid),    // the bot (Hider) can see and shoot capsules
         .capsule_cells   (capsule_cells),
         .ev_capsule      (ev_capsule),       // I shot a capsule -> other board
@@ -460,14 +472,16 @@ module My_Top_Module (
     wire [15:0] game_view_pixel = xhair_draw ? xhair_colour : game_pixel_data;
 
     // Decide what to display based on the game state
-    wire [15:0] base_pixel = (game_state == STATE_PLAYING) ? game_view_pixel : ui_pixel_data;
+    wire show_pause = (game_state == STATE_PLAYING) && game_paused;   // pause screen instead of the 3D view
+    wire [15:0] base_pixel = (game_state == STATE_PLAYING && !game_paused) ? game_view_pixel : ui_pixel_data;
     
     // red_pixel is when attacked
     // Push red up, halve green/blue to have a red filter effect
     wire [15:0] red_pixel  = {base_pixel[15:11] | 5'b11000, 1'b0, base_pixel[10:6], 1'b0, base_pixel[4:1]};
     
     // When flashed, solid white screen
-    assign pixel_data = screen_white ? 16'hFFFF :
+    assign pixel_data = show_pause   ? base_pixel :
+                        screen_white ? 16'hFFFF :
                         screen_red   ? red_pixel : base_pixel;
     
     // Oled Display module
@@ -501,10 +515,21 @@ module My_Top_Module (
     );
  
     // Menu/end screens (TODO: add pause screen too)
+    // Menu: mode page (Multiplayer / Singleplayer), then role page (Hider / Seeker)
     game_screens screens (
         .clk         (oled_clk),
         .frame_begin (frame_begin),
         .state       (game_state),
+        .winner      (winner),
+        .game_paused (game_paused),
+        .i_paused    (paused),
+        .link_up     (link_up),
+        .game_mode      (game_mode),
+        .mode_cursor    (mode_cursor),
+        .mp_available   (mp_available),
+        .peer_in_solo   (peer_in_solo),
+        .role_pick      (menu_pick),
+        .role_confirmed (menu_confirmed),
         .pixel_index (pixel_index),
         .pixel_data  (ui_pixel_data)
     );
@@ -709,7 +734,7 @@ module My_Top_Module (
  
 //    assign pixel_data2 = in_minimap ? minimap_pixel : hud_pixel;
  
-    assign pixel_data2 = screen_white ? 16'hFFFF : (in_minimap ? minimap_pixel : hud_pixel);
+    assign pixel_data2 = (screen_white && !game_paused) ? 16'hFFFF : (in_minimap ? minimap_pixel : hud_pixel);
  
 //    // Enemy Player Movement Module
 //    player_movement #(

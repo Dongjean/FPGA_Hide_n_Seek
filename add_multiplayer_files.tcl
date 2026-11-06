@@ -5,7 +5,7 @@
 #   source [get_property DIRECTORY [current_project]]/add_multiplayer_files.tcl
 #
 # Afterwards you can switch the design with one command:
-#   use_team_top    My_Top_Module   (Basys3_Master.xdc + multiplayer_pins.xdc)  <- default
+#   use_team_top    My_Top_Module   (Basys3_Master.xdc)  <- default
 #   use_jb_top      jb_top          (jb_top.xdc only)
 #   use_link_test   link_test_top   (Basys3_Master.xdc + link_test.xdc)
 # Then reset synthesis and rebuild:
@@ -88,7 +88,7 @@ foreach f {uart_transmitter.v uart_receiver.v crc8_checksum.vh packet_sender.v p
            ai_bot.v opponent_select.v multiplayer_core.v jb_top.v My_Top_Module.v} {
     m1_add sources_1 $m1_srcs/sources_1/new/$f
 }
-foreach f {Basys3_Master.xdc multiplayer_pins.xdc link_test.xdc jb_top.xdc} {
+foreach f {Basys3_Master.xdc link_test.xdc jb_top.xdc} {
     m1_add constrs_1 $m1_srcs/constrs_1/new/$f
 }
 foreach f {tb_uart.v tb_packet.v tb_board_controls.v tb_link_test_top.v tb_My_Top_Module.v
@@ -105,10 +105,10 @@ proc m1_constraints {enabled} {
 }
 proc use_team_top {} {
     set_property top My_Top_Module [get_filesets sources_1]
-    m1_constraints {Basys3_Master.xdc multiplayer_pins.xdc}
+    m1_constraints {Basys3_Master.xdc}
     set_property top tb_My_Top_Module [get_filesets sim_1]
     update_compile_order -fileset sources_1
-    puts "Top: My_Top_Module  (constraints: Basys3_Master.xdc + multiplayer_pins.xdc)"
+    puts "Top: My_Top_Module  (constraints: Basys3_Master.xdc)"
 }
 proc use_jb_top {} {
     set_property top jb_top [get_filesets sources_1]
