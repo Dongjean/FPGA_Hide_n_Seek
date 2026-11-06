@@ -15,29 +15,29 @@
 
 module map_gen
 #(
-    parameter integer LOOP_WALLS = 3    // extra passages to open 
+    parameter integer LOOP_WALLS = 3 // extra passages to open 
 )
 (
     input             clk,
     input             reset,     
-    input             start,     // restarts generation even if busy
-    input      [15:0] seed,      // game_seed 
-    output            busy,      // high from the cycle after start until done
+    input             start,// restarts generation even if busy
+    input      [15:0] seed, // game_seed 
+    output            busy, // high from the cycle after start until done
     output reg        done,      
-    output reg        we,        // write enable to the cell-type array
-    output reg [7:0]  waddr,     // y*10 + x
-    output reg [1:0]  wdata      // 00 floor, 01 wall
+    output reg        we, // write enable to the cell-type array
+    output reg [7:0]  waddr, // y*10 + x
+    output reg [1:0]  wdata  // 00 floor, 01 wall
 );
 
     localparam [1:0] T_FLOOR = 2'b00;
     localparam [1:0] T_WALL  = 2'b01;
 
     // FSM states
-    localparam [2:0] S_IDLE  = 3'd0;   // wait for start
-    localparam [2:0] S_ROWS  = 3'd1;   // sidewinder over room rows 1..3, one room per cycle
-    localparam [2:0] S_LOOPS = 3'd2;   // open LOOP_WALLS extra passages
-    localparam [2:0] S_WRITE = 3'd3;   // stream 100 cells to the array
-    localparam [2:0] S_DONE  = 3'd4;   // pulse done, return to idle
+    localparam [2:0] S_IDLE  = 3'd0; // wait for start
+    localparam [2:0] S_ROWS  = 3'd1; // sidewinder over room rows 1..3, one room per cycle
+    localparam [2:0] S_LOOPS = 3'd2; // open LOOP_WALLS extra passages
+    localparam [2:0] S_WRITE = 3'd3; // stream 100 cells to the array
+    localparam [2:0] S_DONE  = 3'd4; // pulse done, return to idle
 
     reg [2:0] state;
 
@@ -48,17 +48,17 @@ module map_gen
     lfsr16 rng (.clk(clk), .reset(reset), .load(start), .seed(seed), .step(rnd_step), .out(r));
 
     // Maze states
-    reg [11:0] east_open;              //passage cells (horizontal)
-    reg [11:0] north_open;             //passage cells (vertical)
-    reg [1:0]  ry;                     // current room row 
-    reg [1:0]  rx;                     // current room column
-    reg [1:0]  run_start;              // first room column of the current run
-    reg [3:0]  removed;                // loop walls opened so far
-    reg [5:0]  tries;                  // loop attempts so far (max 63)
+    reg [11:0] east_open; //passage cells (horizontal)
+    reg [11:0] north_open; //passage cells (vertical)
+    reg [1:0]  ry; // current room row 
+    reg [1:0]  rx; // current room column
+    reg [1:0]  run_start; // first room column of the current run
+    reg [3:0]  removed; // loop walls opened 
+    reg [5:0]  tries; // loop attempts (max 63)
 
     // Write-out counters
-    reg [6:0]  addr;                   // memory address of the 2d grid compressed as list 
-    reg [3:0]  wx, wy;                 // x, y of addr
+    reg [6:0]  addr;  // address of the 2d grid compressed as list 
+    reg [3:0]  wx, wy; // x, y of addr
 
     assign busy = (state != S_IDLE);
 
@@ -112,13 +112,14 @@ module map_gen
 
     reg [1:0] cell_type;
     always @(*) begin
-        if (dx[4] && dy[4])                       // room x room: always floor
+        if (dx[4] && dy[4])                       
             cell_type = T_FLOOR;
-        else if (dx[3] && dy[4])                  // horizontal passage cell
+        else if (dx[3] && dy[4])// horizontal passage cell
             cell_type = (dy[2] && east_open[e_cell_idx])  ? T_FLOOR : T_WALL;
-        else if (dx[4] && dy[3])                  // vertical passage cell
+        else if (dx[4] && dy[3]) // vertical passage cell
             cell_type = (dx[2] && north_open[n_cell_idx]) ? T_FLOOR : T_WALL;
-        else                                      // border or pillar
+        else 
+        // border or pillar
             cell_type = T_WALL;
     end
 
@@ -146,17 +147,17 @@ module map_gen
             removed <= 4'd0; tries <= 6'd0;
             addr <= 7'd0; wx <= 4'd0; wy <= 4'd0;
         end else begin
-            done <= 1'b0;   // default: 1-cycle pulse
-            we   <= 1'b0;   // default: no write
+            done <= 1'b0; // default: 1-cycle pulse
+            we   <= 1'b0; // default: no write
             case (state)
-                S_IDLE: ;   // wait for start
+                S_IDLE: ; // wait for start
 
                 S_ROWS: begin
                     if (carve_east) begin
-                        east_open[east_idx] <= 1'b1;         // extend the run east
+                        east_open[east_idx] <= 1'b1; // extend the run east
                         rx <= rx + 2'd1;
                     end else begin
-                        north_open[north_idx] <= 1'b1;       // close run: carve north from one room
+                        north_open[north_idx] <= 1'b1; // close run: carve north from one room
                         if (rx == 2'd3) begin
                             rx <= 2'd0;
                             run_start <= 2'd0;
@@ -164,17 +165,18 @@ module map_gen
                             else            ry <= ry + 2'd1;
                         end else begin
                             rx        <= rx + 2'd1;
-                            run_start <= rx + 2'd1;          // next run starts after this room
+                            run_start <= rx + 2'd1;// next run starts after this room
                         end
                     end
                 end
 
                 S_LOOPS: begin
                     if (removed == LOOP_WALLS || tries == 6'd63) begin
-                        state <= S_WRITE;                    // (rng stops stepping next cycle)
+                        state <= S_WRITE; // (rng stops stepping next cycle)
                     end else begin
                         tries <= tries + 6'd1;
-                        if (cand_closed) begin               // only count walls that were closed
+                        if (cand_closed) begin 
+                        // only count walls that were closed
                             if (cand_is_east) east_open[cand[3:0]] <= 1'b1;
                             else              north_open[cand_n_idx] <= 1'b1;
                             removed <= removed + 4'd1;
@@ -196,7 +198,8 @@ module map_gen
                 end
 
                 S_DONE: begin
-                    done  <= 1'b1;   // seen one cycle after the last write (addr 99)
+                    done  <= 1'b1;   
+                    // seen one cycle after the last write (addr 99)
                     state <= S_IDLE;
                 end
 
