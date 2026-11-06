@@ -376,7 +376,6 @@ module My_Top_Module (
     wire [1:0] ps_set_state;
  
     // Entry point: the other player's actions, from the link (or the bot in solo)
-//    assign ps_set_valid = got_state_change;
     assign ps_set_valid = got_state_change &&
                       ((got_player_state != 2'd2) || sprite_visible); // Only flashbang if the flashed is looking at the flasher
     assign ps_set_state = got_player_state;
