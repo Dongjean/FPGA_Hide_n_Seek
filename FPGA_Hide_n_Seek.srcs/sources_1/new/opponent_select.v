@@ -4,6 +4,9 @@
 //   solo_mode = 0: the other player is on the second Basys3 board (multiplayer_link)
 //   solo_mode = 1: the other player is the AI bot (ai_bot)
 //
+// my_mode (0 = choosing, 1 = singleplayer, 2 = multiplayer) is always sent to the
+// other board, even in solo mode, so it knows when Multiplayer is unavailable.
+//
 // Both sides use exactly the same signals, so the rest of the game works the same
 // in both modes: it sends this player's state and events in, and gets the other
 // player's state and events out.
@@ -44,6 +47,8 @@ module opponent_select
     input [31:0]capsule_cells,           // {y, x} per capsule
 
     // Main menu
+    input [1:0]my_mode,                  // 0 = choosing, 1 = singleplayer, 2 = multiplayer
+    output [1:0]peer_mode,               // the other board's my_mode (0 while the link is down)
     input [1:0]my_pick,                  // role this player picked: 1 = Hider, 2 = Seeker
     input my_confirmed,                  // ... and confirmed
     output [1:0]peer_pick,               // the other player's pick (second board only)
@@ -129,6 +134,8 @@ module opponent_select
         .reset          (reset),
         .link_rx        (link_rx),
         .link_tx        (link_tx),
+        .my_mode        (my_mode),
+        .peer_mode      (peer_mode),
         .my_pick        (my_pick),
         .my_confirmed   (my_confirmed && !solo_mode),
         .peer_pick      (l_peer_pick),

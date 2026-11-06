@@ -91,6 +91,10 @@ module My_Top_Module (
     wire [1:0]my_role;                      // 1 = Hider, 2 = Seeker (menu: highlighted role)
     wire [1:0]menu_pick, winner;            // for the menu / end screens
     wire menu_confirmed, peer_confirmed, is_master;
+    wire [1:0]game_mode;                    // main menu: 0 = mode page, 1 = single, 2 = multi
+    wire solo_mode;                         // Singleplayer chosen: the other player is the AI bot
+    wire mode_cursor, mp_available, peer_in_solo;
+    
     wire time_up;                           // match_timer -> Hider wins
     wire crosshair_hit;                     // renderer: other player under the crosshair
     wire sprite_visible;                    // renderer: other player is visibly drawn on-screen
@@ -233,7 +237,7 @@ module My_Top_Module (
         .seed            (gen_seed),
         .in_game         (in_game),
         .game_paused     (game_paused),
-        .solo_mode       (sw[12]),           // player-distance rule only vs the bot
+        .solo_mode       (solo_mode),           // player-distance rule only vs the bot
         .cells           (cells),
         .hider_cell      (hider_cell),
         .seeker_cell     (seeker_cell),
@@ -333,6 +337,11 @@ module My_Top_Module (
         .my_role         (my_role),
         .menu_pick       (menu_pick),
         .menu_confirmed  (menu_confirmed),
+        .game_mode       (game_mode),
+        .solo_mode       (solo_mode),
+        .mode_cursor     (mode_cursor),
+        .mp_available    (mp_available),
+        .peer_in_solo    (peer_in_solo),
         .peer_confirmed  (peer_confirmed),
         .is_master       (is_master),
         .winner          (winner),
@@ -474,6 +483,7 @@ module My_Top_Module (
     );
  
     // Menu/end screens (TODO: add pause screen too)
+    // Menu: mode page (Multiplayer / Singleplayer), then role page (Hider / Seeker)
     game_screens screens (
         .clk         (oled_clk),
         .frame_begin (frame_begin),
@@ -482,6 +492,13 @@ module My_Top_Module (
         .game_paused (game_paused),
         .i_paused    (paused),
         .link_up     (link_up),
+        .game_mode      (game_mode),
+        .mode_cursor    (mode_cursor),
+        .mp_available   (mp_available),
+        .link_up        (link_up),
+        .peer_in_solo   (peer_in_solo),
+        .role_pick      (menu_pick),
+        .role_confirmed (menu_confirmed),
         .pixel_index (pixel_index),
         .pixel_data  (ui_pixel_data)
     );

@@ -1,38 +1,8 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// world_top - owner of the match's cell-type array (Andrew, world generation)
-//
-// What it does
-//   1. Runs map_gen on `start` (seed_capture's seed_valid, or the boot pulse).
-//   2. Owns cells[199:0] and arbitrates every write into it:
-//        map_gen  >  portal_ctrl  >  capsule_ctrl      (one write per cycle, max)
-//      Portal and capsule writes are only accepted while map_ready is high
-//      (after the map is finished and before the next start), because map_gen
-//      would overwrite them anyway.  A request that loses must be held until
-//      its *_wgrant is seen high.
-//   3. Converts cells to Dongjin's engine format map_bits[99:0].
-//   4. Picks the spawns (spawn rule "option B") and drives load_pos/load_x/
-//      load_y/load_dir into player_movement one cycle after the map is done,
-//      and again on every `respawn` pulse (e.g. the countdown "go" event).
-//   5. Gives a combinational cell-type read port for Toh's AI bot.
-//   6. opp_spawn_x/opp_spawn_y: the other player's corner, valid 1 cycle after
-//      start (before the maze is finished), for placing the AI bot.
-//
-// Spawn rule (option B, 10x10)
-//   Corners are fixed room cells, always on opposite corners of the maze:
-//     diag = 0 : (1,1) and (7,7)          diag = 1 : (7,1) and (1,7)
-//     swap = 0 : Hider on the first one   swap = 1 : Hider on the second one
-//   diag and swap come from the seed, so both boards pick the same layout
-//   with no extra link traffic.  Facing = first open neighbour in the order
-//   E, S, W, N ("open" = floor or capsule; wall and portal are solid).
-//   With this maze, (1,1), (7,1) and (7,7) always face East; (1,7) faces
-//   East or South depending on the maze.
-//
-// Cell-type array: cells[2*(y*10+x) +: 2] - 00 floor, 01 wall, 10 portal, 11 capsule
-// Engine map     : map_bits[99 - (y*10+x)], 1 = solid (wall or portal)
-//
-// Clock: oled_clk (6.25 MHz).  Reset: synchronous, active-high (btnC).
-//////////////////////////////////////////////////////////////////////////////////
+
+//world_top - holds the cell type array for the match 
+
+
 module world_top
 #(
     parameter integer LOOP_WALLS = 3
@@ -41,15 +11,15 @@ module world_top
     input                 clk,
     input                 reset,
 
-    // ---- Match start ----
-    input                 start,          // 1-cycle: build a new map from `seed`
+    // match start
+    input                 start,         
     input          [15:0] seed,
-    input                 is_hider,       // role of THIS board's player (from game logic)
-    input                 respawn,        // 1-cycle: send the spawn to player_movement again
+    input                 is_hider, // role of THIS board's player (from game logic)
+    input                 respawn, //send the spawn to player_movement 
 
-    // ---- Lower-priority write ports (hold *_we until *_wgrant) ----
+    // lower priority write ports 
     input                 portal_we,
-    input          [7:0]  portal_waddr,   // y*10 + x
+    input          [7:0]  portal_waddr,  
     input          [1:0]  portal_wdata,
     output                portal_wgrant,
     input                 cap_we,
@@ -57,36 +27,35 @@ module world_top
     input          [1:0]  cap_wdata,
     output                cap_wgrant,
 
-    // ---- Read port for the AI bot (combinational) ----
+    // read port for the AI bot (combinational)
     input          [3:0]  rd_x,
     input          [3:0]  rd_y,
-    output         [1:0]  rd_type,        // 01 (wall) if (rd_x, rd_y) is off the map
+    output         [1:0]  rd_type, // 01 (wall) if (rd_x, rd_y) is outside the map
 
-    // ---- Map outputs ----
-    output reg    [199:0] cells,          // to minimap_render, portal/capsule ctrl
-    output        [99:0]  map_bits,       // to Raycast_3D_Engine and player_movement
+    // map outputs
+    output reg    [199:0] cells, // to minimap_render, portal/capsule ctrl
+    output        [99:0]  map_bits, // to Raycast_3D_Engine and player_movement
     output                gen_busy,
-    output reg            map_ready,      // level: map finished, writes accepted
-    output                map_done,       // 1-cycle: map finished (same cycle as map_gen.done)
+    output reg            map_ready,  // stays 1 while map is done (writes allowed)
+    output                map_done,   //  map done (same cycle as map_gen.done)
 
-    // ---- Spawn: this board's player (to player_movement) ----
-    output reg            load_pos,       // 1-cycle
-    output reg signed [15:0] load_x,      // Q8.8 cell centre
+    // spawn for this board's player (to player_movement)
+    output reg            load_pos,       
+    output reg signed [15:0] load_x,      
     output reg signed [15:0] load_y,
-    output reg     [7:0]  load_dir,       // 0 N, 64 E, 128 S, 192 W
+    output reg     [7:0]  load_dir,  
 
-    // ---- Spawn: the other player (for the AI bot), valid on the same load_pos ----
+    // spawn for the other player (for the AI bot), same timing as load_pos
     output reg signed [15:0] opp_x,
     output reg signed [15:0] opp_y,
     output reg     [7:0]  opp_dir,
 
-    // ---- Spawn corner of the other player, valid from 1 cycle after start ----
-    // Does not wait for the maze (the corner depends only on the seed and roles),
-    // so the AI bot can be placed right when the match starts.
+    // other player's spawn corner, ready from 1 cycle after start
+    // (only depends on seed + roles, doesn't wait for the maze)
     output signed  [15:0] opp_spawn_x,
     output signed  [15:0] opp_spawn_y,
 
-    // ---- Spawn cells (y*10 + x) for portal_ctrl / capsule_ctrl ----
+    // spawn cells (y*10 + x) for portal_ctrl / capsule_ctrl
     output         [6:0]  hider_cell,
     output         [6:0]  seeker_cell
 );
@@ -94,15 +63,13 @@ module world_top
     localparam [1:0] T_FLOOR = 2'b00, T_WALL = 2'b01, T_PORTAL = 2'b10, T_CAPSULE = 2'b11;
     localparam [7:0] DIR_N = 8'd0, DIR_E = 8'd64, DIR_S = 8'd128, DIR_W = 8'd192;
 
-    // Corner cell indices (y*10 + x)
-    localparam [6:0] C11 = 7'd11;   // (1,1)
-    localparam [6:0] C71 = 7'd17;   // (7,1)  x = 7, y = 1
-    localparam [6:0] C17 = 7'd71;   // (1,7)  x = 1, y = 7
-    localparam [6:0] C77 = 7'd77;   // (7,7)
+    //corner cell index (y*10 + x)
+    localparam [6:0] C11 = 7'd11;   
+    localparam [6:0] C71 = 7'd17;   
+    localparam [6:0] C17 = 7'd71;   
+    localparam [6:0] C77 = 7'd77;  
 
-    // =====================================================================
-    // Maze generator
-    // =====================================================================
+    //maze generator (submachine)
     wire       gen_done, gen_we;
     wire [7:0] gen_waddr;
     wire [1:0] gen_wdata;
@@ -121,19 +88,15 @@ module world_top
 
     assign map_done = gen_done;
 
-    // map_ready: high from the cycle after done until the next start.
+    //map_ready: 1 from the cycle after done until the next start
     always @(posedge clk) begin
         if (reset)         map_ready <= 1'b0;
-        else if (start)    map_ready <= 1'b0;   // start wins over a done in the same cycle
+        else if (start)    map_ready <= 1'b0;   // start wins if done comes in the same cycle
         else if (gen_done) map_ready <= 1'b1;
     end
 
-    // =====================================================================
-    // Write arbitration
-    // =====================================================================
-    // map_gen only writes while busy, and busy means !map_ready, so map_gen
-    // never collides with the other two.  `!start` closes the one cycle where
-    // map_ready is still 1 but a new map has just been requested.
+    
+    //writes only allowed after map is done, not on start cycle
     wire wr_open = map_ready && !start;
 
     assign portal_wgrant = portal_we && wr_open && (portal_waddr < 8'd100);
@@ -141,18 +104,16 @@ module world_top
 
     always @(posedge clk) begin
         if (reset)
-            cells <= {100{T_WALL}};                         // all solid until the first map
+            cells <= {100{T_WALL}};// all wall until the first map
         else if (gen_we)
-            cells[{gen_waddr[6:0], 1'b0} +: 2] <= gen_wdata;   // {addr,0} = 2*addr
+            cells[{gen_waddr[6:0], 1'b0} +: 2] <= gen_wdata; 
         else if (portal_wgrant)
             cells[{portal_waddr[6:0], 1'b0} +: 2] <= portal_wdata;
         else if (cap_wgrant)
             cells[{cap_waddr[6:0], 1'b0} +: 2] <= cap_wdata;
     end
 
-    // =====================================================================
-    // Engine format: bit (99 - i) = 1 when cell i is solid
-    // =====================================================================
+    //engine format: bit (99 - i) = 1 when cell i is solid
     genvar gi;
     generate
         for (gi = 0; gi < 100; gi = gi + 1) begin : g_map_bits
@@ -161,18 +122,13 @@ module world_top
         end
     endgenerate
 
-    // =====================================================================
-    // Read port for the AI bot
-    // =====================================================================
+    //read port for the AI bot
     wire       rd_in  = (rd_x <= 4'd9) && (rd_y <= 4'd9);
-    wire [6:0] rd_idx = {rd_y, 3'b000} + {rd_y, 1'b0} + rd_x;    // y*8 + y*2 + x
+    wire [6:0] rd_idx = {rd_y, 3'b000} + {rd_y, 1'b0} + rd_x;
     assign rd_type = rd_in ? cells[{rd_idx, 1'b0} +: 2] : T_WALL;
 
-    // =====================================================================
-    // Spawn selection (option B)
-    // =====================================================================
-    // Two layout bits taken from the seed at start.  XOR-reducing a byte uses
-    // every bit of it, so these are not just a copy of map_gen's first coin flip.
+    //spawn selection
+    //2 random bits from the seed
     reg diag, swap;
     always @(posedge clk) begin
         if (reset) begin
@@ -184,9 +140,7 @@ module world_top
         end
     end
 
-    // Facing for one cell: first non-solid neighbour in the order E, S, W, N.
-    // i is always one of the four constant corners, so each call reduces to a
-    // few 2-bit compares on fixed bits of cells - no variable mux.
+    //facing: first open neighbour, checks E, S, W, N
     function is_open (input [1:0] t);
         is_open = (t == T_FLOOR) || (t == T_CAPSULE);
     endfunction
@@ -197,7 +151,7 @@ module world_top
             else if (is_open(c[2*(i + 7'd10) +: 2])) first_open = DIR_S;
             else if (is_open(c[2*(i - 7'd1)  +: 2])) first_open = DIR_W;
             else if (is_open(c[2*(i - 7'd10) +: 2])) first_open = DIR_N;
-            else                                     first_open = DIR_E;  // cannot happen: every room has a way out
+            else                                     first_open = DIR_E;  // can't happen: every room has a way out
         end
     endfunction
 
@@ -206,7 +160,7 @@ module world_top
     wire [7:0] face17 = first_open(cells, C17);
     wire [7:0] face77 = first_open(cells, C77);
 
-    // Corner A / B of the chosen diagonal
+    //corner A / B of the chosen diagonal
     wire [6:0] cell_a = diag ? C71 : C11;
     wire [6:0] cell_b = diag ? C17 : C77;
     wire [7:0] face_a = diag ? face71 : face11;
@@ -222,8 +176,8 @@ module world_top
     wire [7:0] my_face  = is_hider ? hider_face  : seeker_face;
     wire [7:0] opp_face = is_hider ? seeker_face : hider_face;
 
-    // Corner x and y are only ever 1 or 7: x is 7 for cells 17 and 77,
-    // y is 7 for cells 71 and 77.
+    //corner x and y are only ever 1 or 7
+    //x = 7 for cells 17 and 77, y = 7 for cells 71 and 77
     function [3:0] corner_x (input [6:0] i);
         corner_x = (i == C71 || i == C77) ? 4'd7 : 4'd1;
     endfunction
@@ -231,25 +185,23 @@ module world_top
         corner_y = (i == C17 || i == C77) ? 4'd7 : 4'd1;
     endfunction
 
-    // Q8.8 centre of cell c = (c << 8) + 128 = {4'b0, c, 8'h80}
+    
     function signed [15:0] centre (input [3:0] c);
         centre = {4'b0000, c, 8'h80};
     endfunction
 
-    // Early copy of the other player's corner (combinational from diag/swap/is_hider)
+    //other player's corner, available early
     assign opp_spawn_x = centre(corner_x(opp_cell));
     assign opp_spawn_y = centre(corner_y(opp_cell));
 
-    // load_pos fires the cycle after map_gen.done.  On the done cycle the last
-    // cell write has already landed in `cells` (it was registered one edge
-    // earlier), so the facing logic sees the complete map.
+    //load spawn the cycle after map_gen done
     always @(posedge clk) begin
         if (reset) begin
             load_pos <= 1'b0;
             load_x   <= 16'sd0;  load_y <= 16'sd0;  load_dir <= DIR_E;
             opp_x    <= 16'sd0;  opp_y  <= 16'sd0;  opp_dir  <= DIR_E;
         end else begin
-            load_pos <= 1'b0;                                   // default: 1-cycle pulse
+            load_pos <= 1'b0;// default 0, so it's a 1 cycle pulse
             if (gen_done || (respawn && map_ready && !start)) begin
                 load_pos <= 1'b1;
                 load_x   <= centre(corner_x(my_cell));
