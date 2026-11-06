@@ -97,6 +97,9 @@ module My_Top_Module (
     wire got_state_change;                  // link -> player_state_FSM
     wire [1:0]got_player_state;
     wire my_stunned;
+    wire [6:0]mp_seg;                       // multiplayer 7-segment, muxed with the round timer
+    wire mp_dp;
+    wire [3:0]mp_an;
  
     // ================= Andrew: world generation =================
     // A new maze is built on every start_game, from the shared game_seed, so both
@@ -120,6 +123,11 @@ module My_Top_Module (
  
     wire        gen_start = start_game | boot_start;
     wire [15:0] gen_seed  = start_game ? game_seed : 16'hACE1;
+
+    // Seed of the maze on screen
+    reg [15:0] map_seed = 16'hACE1;
+    always @(posedge oled_clk)
+        if (gen_start) map_seed <= gen_seed;
  
     wire [199:0]       cells;
     wire [99:0]        map_bits;
@@ -131,6 +139,8 @@ module My_Top_Module (
     wire [3:0]         bump_cx, bump_cy;
     wire               map_done;
     wire [6:0]         hider_cell, seeker_cell;
+    wire [7:0]         world_opp_dir;        // other player's spawn facing
+    wire               portals_ready;
  
     // world_top write ports (portal_ctrl > capsule_ctrl)
     wire               portal_we, portal_wgrant, cap_we, cap_wgrant;
@@ -159,6 +169,12 @@ module My_Top_Module (
     wire               fired_gun;
     wire               has_ammo;
     wire               has_uses;
+    wire               used_item;
+
+    // Held item, shown to the other player: 0 empty, 1 gun ready, 2 item ready
+    wire [1:0]my_hand = !in_game ? 2'd0 :
+                        weapon_sel[0] ? (has_uses ? 2'd2 : 2'd0) : (has_ammo ? 2'd1 : 2'd0);
+    wire [1:0]op_hand;
  
     world_top #(.LOOP_WALLS(3)) world (
         .clk           (oled_clk),
@@ -189,7 +205,7 @@ module My_Top_Module (
         .load_dir      (load_dir),
         .opp_x         (),
         .opp_y         (),
-        .opp_dir       (),
+        .opp_dir       (world_opp_dir),
         .opp_spawn_x   (bot_spawn_x),        // valid 1 cycle after start: in time for the bot
         .opp_spawn_y   (bot_spawn_y),
         .hider_cell    (hider_cell),
@@ -218,7 +234,7 @@ module My_Top_Module (
         .tp_x          (tp_x),
         .tp_y          (tp_y),
         .tp_dir        (tp_dir),
-        .portals_ready (),
+        .portals_ready (portals_ready),
         .pair_valid    (pair_valid),
         .portal_cells  (),
         .exit_cells    (exit_cells)
@@ -260,17 +276,29 @@ module My_Top_Module (
         .game_sec        ()
     );
  
-    // ---- 5:00 match timer (PLACEHOLDER: replace with Isaac's, same ports) ----
-    match_timer timer (
+    // ---- 5:00 round timer on the 7-seg (Isaac) ----
+    wire [6:0] t_seg;
+    wire       t_dp;
+    wire [3:0] t_an;
+    game_timer #(.CLK_HZ(6_250_000), .ROUND_MINUTES(5), .PENALTY_SEC(10)) round_timer (
         .clk               (oled_clk),
         .reset             (reset_game),
-        .start             (start_game),
-        .in_game           (in_game),
-        .game_paused       (game_paused),
-        .time_penalty      (time_penalty),
+        .start             (start_game | restart_game),
+        .run               (in_game && !game_paused),
+        .penalty           (time_penalty),
+        .time_up           (),
+        .time_up_pulse     (time_up),          // -> multiplayer_core: Hider wins at 0
         .game_seconds_left (seconds_left),
-        .time_up           (time_up)          // -> multiplayer_core: Hider wins at 0
+        .seg               (t_seg),
+        .dp                (t_dp),
+        .an                (t_an)
     );
+
+    // Timer in a match, multiplayer readout otherwise or with sw8 / sw9 up
+    wire show_timer = in_game && !sw[8] && !sw[9];
+    assign seg = show_timer ? t_seg : mp_seg;
+    assign dp  = show_timer ? t_dp  : mp_dp;
+    assign an  = show_timer ? t_an  : mp_an;
  
     // ---- Ammo / item uses per role, no recharge ----
     // Seeker: pistol 10, Pinger 5.  Hider: Freeze Gun 5, Flashbang 5.
@@ -290,7 +318,7 @@ module My_Top_Module (
         .has_ammo     (has_ammo),
         .has_use      (has_uses),
         .fired_gun    (fired_gun),
-        .used_item    ()
+        .used_item    (used_item)
     );
  
     multiplayer_core #(.CLK_HZ(6_250_000), .SIMPLE_AIM(0)) multiplayer (
@@ -353,6 +381,8 @@ module My_Top_Module (
         .got_player_state (got_player_state),
         .renderer_hit    (crosshair_hit),
         .my_stim         (1'b0),
+        .my_hand         (my_hand),
+        .op_hand         (op_hand),
         .peer_stim_used  (peer_flash),       // the Hider used a Flashbang (Stim event reused)
         .capsule_valid   (capsule_valid),    // the bot (Hider) can see and shoot capsules
         .capsule_cells   (capsule_cells),
@@ -361,9 +391,9 @@ module My_Top_Module (
         .peer_capsule    (peer_capsule),     // other board / bot shot one -> capsule_ctrl
         .peer_capsule_id (peer_capsule_id),
         .led             (led),
-        .seg             (seg),
-        .dp              (dp),
-        .an              (an)
+        .seg             (mp_seg),
+        .dp              (mp_dp),
+        .an              (mp_an)
     );
  
     // ================= Player state FSM (stun / flashbang / attacked) =================
@@ -481,11 +511,42 @@ module My_Top_Module (
  
     // ---- Sprite, shots, ornaments (Isaac) ----
     // Seeker sees the Hider as a room object (from the seed), Hider sees the hunter
-    wire       spr_enable = 1'b1;
-//    wire [1:0] disguise   = (game_seed[1:0] == 2'd3) ? 2'd1 : game_seed[1:0] + 2'd1;   // 1..3
-    wire [1:0] spr_obj    = 1'b1 ? 2'd0 : 2'd1;
+    wire       spr_enable = in_game;
+    // Disguise = seed mod 3, from all 16 bits (sum of the base-4 digits)
+    wire [4:0] seed_digits = game_seed[1:0]   + game_seed[3:2]   + game_seed[5:4]   + game_seed[7:6] +
+                             game_seed[9:8]   + game_seed[11:10] + game_seed[13:12] + game_seed[15:14];
+    wire [1:0] disguise   = (seed_digits % 5'd3) + 2'd1;   // 1 armchair, 2 candelabra, 3 phonograph
+    wire [1:0] spr_obj    = is_hider ? 2'd0 : disguise;
+
+    // Portal cells show the mirror
+    wire [99:0] portal_bits;
+    genvar pi;
+    generate
+        for (pi = 0; pi < 100; pi = pi + 1) begin : portal_map
+            assign portal_bits[pi] = (cells[2 * pi +: 2] == 2'b10);
+        end
+    endgenerate
+
+    // Ornaments for each new maze once its portals are in, the door goes behind the Seeker
+    reg portals_ready_d = 1'b0;
+    always @(posedge oled_clk) portals_ready_d <= portals_ready;
+
+    wire [155:0] orn_entries;
+    ornament_placer ornaments (
+        .clk        (oled_clk),
+        .reset      (reset_game),
+        .start      (portals_ready && !portals_ready_d),
+        .seed       (map_seed),
+        .map_bits   (map_bits),
+        .spawn_cell (seeker_cell),
+        .spawn_dir  (is_hider ? world_opp_dir : load_dir),
+        .portal_bits (portal_bits),
+        .busy       (),
+        .entries    (orn_entries)
+    );
  
     // 3D Renderer
+    wire [15:0] view_pixel;
     Raycast_3D_Engine #(
         .DIR_NORTH (DIR_NORTH),
         .DIR_EAST  (DIR_EAST),
@@ -505,10 +566,33 @@ module My_Top_Module (
         .spr_x       (op_x),
         .spr_y       (op_y),
         .spr_facing  (op_dir),
+        .spr_hand    (op_hand),
+        .orn_entries (orn_entries),
+        .portal_bits (portal_bits),
+        .cap_valid   (capsule_valid[1:0] & {2{in_game}}),
+        .cap_cells   (capsule_cells[15:0]),
         .crosshair_hit (crosshair_hit), // This is the output that decides if a crosshair is on an enemy
         .sprite_visible (sprite_visible),
-        .pixel_data  (game_pixel_data)
+        .pixel_data  (view_pixel)
     );
+
+    // First-person held item over the 3D view (the crosshair is drawn on top)
+    wire        hand_hit;
+    wire [15:0] hand_colour;
+    hand_overlay hand (
+        .clk         (oled_clk),
+        .pixel_index (pixel_index),
+        .in_game     (in_game),
+        .is_hider    (is_hider),
+        .item_sel    (weapon_sel[0]),
+        .has_ammo    (has_ammo),
+        .has_use     (has_uses),
+        .fired_gun   (fired_gun),
+        .used_item   (used_item),
+        .hit         (hand_hit),
+        .colour      (hand_colour)
+    );
+    assign game_pixel_data = hand_hit ? hand_colour : view_pixel;
  
     // Player Movement Module
     // Stops while either player is paused, the link is lost, I am frozen or out of health.
