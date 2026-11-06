@@ -71,7 +71,7 @@ set_property -dict { PACKAGE_PIN U17   IOSTANDARD LVCMOS33 } [get_ports btnD]
 ## Board-to-board link on Pmod JA (change these 2 lines if JA is taken by an OLED)
 ##   JA1 = link_tx, JA2 = link_rx, JA5 (or JA11) = GND. Never connect the VCC pins together.
 set_property -dict { PACKAGE_PIN J1   IOSTANDARD LVCMOS33 } [get_ports link_tx]
-set_property -dict { PACKAGE_PIN L2   IOSTANDARD LVCMOS33 } [get_ports link_rx]
+set_property -dict { PACKAGE_PIN L2   IOSTANDARD LVCMOS33   PULLUP true } [get_ports link_rx]
 ##Pmod Header JA
 #set_property -dict { PACKAGE_PIN J1   IOSTANDARD LVCMOS33 } [get_ports {JA[0]}];#Sch name = JA1
 #set_property -dict { PACKAGE_PIN L2   IOSTANDARD LVCMOS33 } [get_ports {JA[1]}];#Sch name = JA2

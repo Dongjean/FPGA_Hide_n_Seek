@@ -11,7 +11,6 @@
 //   weapon        sw[1:0]            right click (swap)   1 / 2
 //   pause/resume  flip sw[15]        -                    Esc or P
 //   confirm       -                  middle click         Enter
-//   reset game    hold btnC 2 s      -                    -
 //
 // Mouse turning: horizontal movement is added up, and each frame where at least
 // MOUSE_STEP counts have built up turns the player one step (the same turn speed
@@ -21,8 +20,7 @@ module player_controls
 #(
     parameter integer CLK_HZ        = 6_250_000,
     parameter integer MOUSE_STEP    = 4,
-    parameter integer POWERUP_MS    = 500,
-    parameter integer HOLD_RESET_MS = 2000
+    parameter integer POWERUP_MS    = 500
 )
 (
     input clk,
@@ -57,8 +55,7 @@ module player_controls
     wire sw_weapon_changed, sw_paused, sw_pause_changed;
 
     board_controls #(
-        .CLK_HZ        (CLK_HZ),
-        .HOLD_RESET_MS (HOLD_RESET_MS)
+        .CLK_HZ        (CLK_HZ)
     ) board_controls (
         .clk            (clk),
         .btnU           (btnU),
