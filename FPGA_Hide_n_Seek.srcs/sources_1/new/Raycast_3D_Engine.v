@@ -308,7 +308,7 @@ module Raycast_3D_Engine
         .centre_wall_dist (centre_wall_dist),
         .hit        (sprite_hit),
         .colour     (sprite_colour),
-        .crosshair_hit (crosshair_hit)
+        .crosshair_hit (crosshair_hit) // Where the crosshair hit logic is output
     );
 
     always @(*) begin

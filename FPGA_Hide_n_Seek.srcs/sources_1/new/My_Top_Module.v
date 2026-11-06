@@ -81,7 +81,8 @@ module My_Top_Module (
     wire my_frozen;
     wire in_game, start_game, restart_game, game_paused, link_up;
     wire [15:0]game_seed;
-    wire signed [15:0]op_x, op_y;           // other player: draw these (sprite / minimap)
+    wire signed [15:0]op_x = 16'sd1408;
+    wire signed [15:0]op_y = 16'sd1408;           // other player: draw these (sprite / minimap)
     wire [7:0]op_dir, op_health;
     wire op_frozen;
     wire reveal_active, got_pinged;
@@ -349,14 +350,14 @@ module My_Top_Module (
     wire       state_can_act, screen_white, screen_red;
     wire       ps_set_valid;
     wire [1:0] ps_set_state;
-
+    
     // DEBUG entry point (replace with game logic / packet_receiver events):
     //   sw[3:2] = state to enter, rising edge of sw[4] = trigger it.
     //   (sw[3:2] = 0 + trigger = cancel.)
     reg dbg_trig_prev = 1'b0;
     always @(posedge oled_clk) dbg_trig_prev <= sw[4];
-    assign ps_set_valid = sw[4] && !dbg_trig_prev;
-    assign ps_set_state = sw[3:2];
+    assign ps_set_valid = enemy_hit_valid; // Temp deal enemy state to myself
+    assign ps_set_state = enemy_hit_state; // Temp deal enemy state to myself
 
     player_state_FSM player_state_fsm (
         .clk          (oled_clk),
@@ -370,8 +371,45 @@ module My_Top_Module (
         .screen_red   (screen_red)
     );
 
+    // Crowd control I deal to enemy
+    // Fire while the crosshair is on the enemy sprite -> enemy_playerstate:
+    // Seeker pistol -> 3 damaged | Hider Freeze Gun -> 1 stunned | Hider Flashbang -> 2 blinded
+    // enemy_hit_valid / enemy_hit_state are the pulse + state for the link to send later
+    // NOTE: not connected to the other board yet.
+
+    // Crosshair + crowd control dealt to the enemy
+    wire        crosshair_hit;              // renderer: enemy sprite is under the crosshair
+    wire [1:0]  enemy_playerstate;          // 0 normal, 1 stunned, 2 blinded, 3 damaged
+    wire        enemy_hit_valid;            // 1-cycle: a crowd-control shot landed (for the link, later)
+    wire [1:0]  enemy_hit_state;            // state that shot puts the enemy in
+    enemy_state_ctrl #(.CLK_HZ(6_250_000)) enemy_state (
+        .clk               (oled_clk),
+        .reset             (reset_game || start_game),
+        .game_paused       (game_paused),
+        .aim_hit           (crosshair_hit && shoot),
+        .can_fire          (in_game && can_move && state_can_act),
+        .shoot             (shoot),
+        .weapon_sel        (weapon_sel),
+        .is_hider          (is_hider),
+        .hit_valid         (enemy_hit_valid),
+        .hit_state         (enemy_hit_state),
+        .enemy_playerstate (enemy_playerstate)
+    );
+
+    // Crosshair overlay
+    // Crosshair in the middle of the 3D view (turns red when an enemy is on target)
+    wire        xhair_draw;
+    wire [15:0] xhair_colour;
+    crosshair_overlay xhair (
+        .pixel_index (pixel_index),
+        .on_target   (crosshair_hit), // For turning crosshair red when on an enemy
+        .draw        (xhair_draw),
+        .colour      (xhair_colour)
+    );
+    wire [15:0] game_view_pixel = xhair_draw ? xhair_colour : game_pixel_data;
+
     // Decide what to display based on the game state
-    wire [15:0] base_pixel = (game_state == STATE_PLAYING) ? game_pixel_data : ui_pixel_data;
+    wire [15:0] base_pixel = (game_state == STATE_PLAYING) ? game_view_pixel : ui_pixel_data;
     
     // red_pixel is when attacked
     // Push red up, halve green/blue to have a red filter effect
@@ -407,7 +445,7 @@ module My_Top_Module (
         .clk         (oled_clk),
         .reset       (1'b0),
         .frame_begin (frame_begin),
-        .btn_confirm (btnC),
+        .btn_confirm (sw[14]),
         .state       (game_state)
     );
 
@@ -446,7 +484,7 @@ module My_Top_Module (
         .spr_x       (op_x),
         .spr_y       (op_y),
         .spr_facing  (op_dir),
-        .crosshair_hit (crosshair_hit),
+        .crosshair_hit (crosshair_hit), // This is the output that decides if a crosshair is on an enemy
         .pixel_data  (game_pixel_data)
     );
 
@@ -466,7 +504,7 @@ module My_Top_Module (
         .btn_backward (move_backward),
         .btn_left     (turn_left),
         .btn_right    (turn_right),
-        .frame_begin  (frame_begin && can_move && state_can_act),
+        .frame_begin  (frame_begin && can_move && state_can_act), // Only move if the game logic permits you to move
         .map_bits     (map_bits),
         .load_pos     (load_pos | tp_load),
         .load_x       (load_pos ? load_x   : tp_x),
