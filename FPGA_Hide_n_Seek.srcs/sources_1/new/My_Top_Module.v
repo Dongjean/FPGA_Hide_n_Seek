@@ -495,7 +495,6 @@ module My_Top_Module (
         .game_mode      (game_mode),
         .mode_cursor    (mode_cursor),
         .mp_available   (mp_available),
-        .link_up        (link_up),
         .peer_in_solo   (peer_in_solo),
         .role_pick      (menu_pick),
         .role_confirmed (menu_confirmed),
