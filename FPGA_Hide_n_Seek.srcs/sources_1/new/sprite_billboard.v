@@ -2,7 +2,19 @@
 // Billboard sprite with 8 facing directions, 48x48 per frame
 // spr_obj: 0 hunter, 1 armchair, 2 candelabra, 3 phonograph
 // Frames per object: S, SE, E, NE, N, NW, W, SW, palette index 0 = transparent
-module sprite_billboard (
+// Frames 32..47: hunter walk A then walk B, same direction order
+// Frames 48..63: held-item layer for the hunter (energy blast, then detector) per direction,
+// 64..65: hider layer (snowflake, flashbang), drawn over the frame with palettes 4 and 5
+// Hunter walks while it is moving, hiders float up and down
+// SINGLE_VIEW = 1: one floating frame for every direction (time capsule)
+module sprite_billboard #(
+    parameter integer CLK_HZ      = 6_250_000,
+    parameter integer SINGLE_VIEW = 0,
+    parameter integer ROM_DEPTH   = 152064,         // frames * 48 * 48
+    parameter         IDX_MEM     = "sprite_idx.mem",
+    parameter         PAL_MEM     = "sprite_pal.mem",
+    parameter         PAL_LIT_MEM = "sprite_pal_lit.mem"
+)(
     input clk,
     input reset,
 
@@ -16,6 +28,7 @@ module sprite_billboard (
     input signed [15:0] spr_x,       // Q8.8
     input signed [15:0] spr_y,
     input        [7:0]  spr_facing,  // 0 north, 64 east
+    input        [1:0]  spr_hand,    // 0 empty, 1 gun ready, 2 item ready
 
     input        [6:0]  pixel_x,
     input        [5:0]  pixel_y,
@@ -25,6 +38,7 @@ module sprite_billboard (
     input        [7:0]  centre_wall_dist,   // wall distance in column 48
 
     output              hit,         // draw colour instead of the wall
+    output       [7:0]  dist,        // for ordering sprites
     output       [15:0] colour,
     output              crosshair_hit,
     output reg          sprite_visible // at least one sprite texel was drawn in the last OLED frame
@@ -84,13 +98,90 @@ module sprite_billboard (
     wire [7:0]  turn      = bearing + 8'd128 - spr_facing + 8'd16;
     wire [2:0]  dir_index = turn[7:5];
 
+    // Hunter moving: position changed within the last 4 samples (1/4 s)
+    localparam integer SAMPLE_CLKS = CLK_HZ / 16;
+    localparam integer STEP_CLKS   = CLK_HZ / 4;        // one step per walk frame
+    localparam integer BOB_CLKS    = CLK_HZ * 3 / 40;   // 32 steps = 2.4 s float period
+
+    reg [31:0]        sample_count = 32'd0;
+    reg [31:0]        step_count   = 32'd0;
+    reg [31:0]        bob_count    = 32'd0;
+    reg signed [15:0] last_x = 16'sd0;
+    reg signed [15:0] last_y = 16'sd0;
+    reg [2:0]         move_hold = 3'd0;
+    reg               walk_phase = 1'b0;
+    reg [4:0]         bob_step = 5'd0;
+
+    wire moving = (move_hold != 3'd0);
+
+    always @(posedge clk) begin
+        if (sample_count == SAMPLE_CLKS - 1) begin
+            sample_count <= 32'd0;
+            last_x <= spr_x;
+            last_y <= spr_y;
+            if ((spr_x != last_x) || (spr_y != last_y))
+                move_hold <= 3'd4;
+            else if (move_hold != 3'd0)
+                move_hold <= move_hold - 3'd1;
+        end else begin
+            sample_count <= sample_count + 32'd1;
+        end
+
+        if (!moving) begin
+            step_count <= 32'd0;
+            walk_phase <= 1'b0;
+        end else if (step_count == STEP_CLKS - 1) begin
+            step_count <= 32'd0;
+            walk_phase <= ~walk_phase;
+        end else begin
+            step_count <= step_count + 32'd1;
+        end
+
+        if (bob_count == BOB_CLKS - 1) begin
+            bob_count <= 32'd0;
+            bob_step  <= bob_step + 5'd1;
+        end else begin
+            bob_count <= bob_count + 32'd1;
+        end
+    end
+
+    // Float height in 1/256 texel, 0..4 texels, (1 - cos) / 2 shape
+    function [10:0] bob_height (input [4:0] k);
+        reg [4:0] q;
+        begin
+            q = k[4] ? (5'd0 - k) : k;      // mirror the second half
+            case (q)
+                5'd0:  bob_height = 11'd0;
+                5'd1:  bob_height = 11'd10;
+                5'd2:  bob_height = 11'd39;
+                5'd3:  bob_height = 11'd86;
+                5'd4:  bob_height = 11'd150;
+                5'd5:  bob_height = 11'd228;
+                5'd6:  bob_height = 11'd316;
+                5'd7:  bob_height = 11'd412;
+                5'd8:  bob_height = 11'd512;
+                5'd9:  bob_height = 11'd612;
+                5'd10: bob_height = 11'd708;
+                5'd11: bob_height = 11'd796;
+                5'd12: bob_height = 11'd874;
+                5'd13: bob_height = 11'd938;
+                5'd14: bob_height = 11'd985;
+                5'd15: bob_height = 11'd1014;
+                default: bob_height = 11'd1024;
+            endcase
+        end
+    endfunction
+
     // Held for the whole frame
     reg                visible;
     reg signed [10:0]  box_left;
     reg [5:0]          box_top;
     reg [6:0]          box_size;
     reg [10:0]         box_step;
-    reg [4:0]          box_frame;     // {obj, dir}
+    reg [6:0]          box_frame;     // ROM frame 0..47
+    reg [1:0]          box_obj;
+    reg [6:0]          box_item;      // item layer frame
+    reg                box_item_on;
     reg [7:0]          box_dist;
 
     always @(posedge clk) begin
@@ -101,7 +192,10 @@ module sprite_billboard (
             box_top  <= 6'd0;
             box_size <= 7'd0;
             box_step <= 11'd0;
-            box_frame <= 5'd0;
+            box_frame <= 7'd0;
+            box_obj  <= 2'd0;
+            box_item <= 7'd0;
+            box_item_on <= 1'b0;
             box_dist <= 8'd0;
         end else begin
             case (state)
@@ -122,7 +216,13 @@ module sprite_billboard (
                     box_top   <= top_row;
                     box_size  <= size;
                     box_step  <= sprite_tex_step(half_height);
-                    box_frame <= {spr_obj, dir_index};
+                    box_frame <= (SINGLE_VIEW != 0)            ? 7'd0 :
+                                 ((spr_obj == 2'd0) && moving) ? {3'b010, walk_phase, dir_index}
+                                                               : {2'b00, spr_obj, dir_index};
+                    box_item  <= (spr_obj == 2'd0) ? {3'b011, spr_hand[1], dir_index}
+                                                   : {6'b100000, spr_hand[1]};
+                    box_item_on <= (SINGLE_VIEW == 0) && (spr_hand != 2'd0);
+                    box_obj   <= (SINGLE_VIEW != 0) ? 2'd0 : spr_obj;
                     box_dist  <= dist_steps;
                     state     <= 4'd0;
                 end
@@ -145,29 +245,39 @@ module sprite_billboard (
     wire in_box = visible && !dx[10] && !dy[10] && (dx < size_signed) && (dy < size_signed);
 
     wire [16:0] u_scaled = dx[5:0] * box_step + {7'd0, box_step[10:1]};
-    wire [16:0] v_scaled = dy[5:0] * box_step + {7'd0, box_step[10:1]};
+    // Hiders sample lower texel rows to float up, the box itself does not move
+    wire [10:0] bob = ((SINGLE_VIEW != 0) || (box_obj != 2'd0)) ? bob_height(bob_step) : 11'd0;
+    wire [16:0] v_scaled = dy[5:0] * box_step + {7'd0, box_step[10:1]} + {6'd0, bob};
     wire [5:0]  tex_u = u_scaled[13:8];
     wire [5:0]  tex_v = v_scaled[13:8];
+    wire        v_in  = (tex_v < 6'd48);
 
     // frame * 2304 + v * 48 + u
-    wire [16:0] frame_base = ({12'd0, box_frame} << 11) + ({12'd0, box_frame} << 8);
-    wire [16:0] row_base   = ({11'd0, tex_v} << 5) + ({11'd0, tex_v} << 4);
-    wire [16:0] sprite_addr = in_box ? (frame_base + row_base + {11'd0, tex_u}) : 17'd0;
+    wire [17:0] frame_base = ({11'd0, box_frame} << 11) + ({11'd0, box_frame} << 8);
+    wire [17:0] item_base  = ({11'd0, box_item}  << 11) + ({11'd0, box_item}  << 8);
+    wire [17:0] row_base   = ({12'd0, tex_v} << 5) + ({12'd0, tex_v} << 4);
+    wire        draw_px    = in_box && v_in;
+    wire [17:0] sprite_addr = draw_px ? (frame_base + row_base + {12'd0, tex_u}) : 18'd0;
+    wire [17:0] item_addr   = (draw_px && box_item_on) ? (item_base + row_base + {12'd0, tex_u}) : 18'd0;
 
-    (* rom_style = "block" *) reg [3:0] sprite_texel [0:73727];   // 32 frames * 48 * 48
-    reg [15:0] sprite_palette     [0:63];
-    reg [15:0] sprite_palette_lit [0:63];
+    (* rom_style = "block" *) reg [3:0] sprite_texel [0:ROM_DEPTH-1];
+    reg [15:0] sprite_palette     [0:127];
+    reg [15:0] sprite_palette_lit [0:127];
     initial begin
-        $readmemh("sprite_idx.mem",     sprite_texel);
-        $readmemh("sprite_pal.mem",     sprite_palette);
-        $readmemh("sprite_pal_lit.mem", sprite_palette_lit);
+        $readmemh(IDX_MEM,     sprite_texel);
+        $readmemh(PAL_MEM,     sprite_palette);
+        $readmemh(PAL_LIT_MEM, sprite_palette_lit);
     end
 
     // Synchronous read for block RAM, the OLED pixel index holds for 16 clocks
+    // Second read port for the item layer
     reg [3:0] texel;
-    always @(posedge clk)
-        texel <= sprite_texel[sprite_addr];
-    
+    reg [3:0] item_texel;
+    always @(posedge clk) begin
+        texel      <= sprite_texel[sprite_addr];
+        item_texel <= sprite_texel[item_addr];
+    end
+
     // `visible` only means that the sprite's box is inside the camera's view;
     // it can still be completely hidden by a wall.  Accumulate hit over
     // one OLED scan instead, so sprite_visible says that an opaque texel really
@@ -187,20 +297,32 @@ module sprite_billboard (
         end
     end
 
-    wire [5:0] palette_addr = {box_frame[4:3], texel};
+    wire       item_px      = box_item_on && (item_texel != 4'd0);
+    wire [6:0] palette_addr = item_px ? {2'b10, (box_obj != 2'd0), item_texel}       // palette 4 hunter, 5 hider
+                                      : {1'b0, box_obj, texel};
     wire [4:0] shade = wall_shade_for_distance({2'b00, box_dist});
 
     // Crosshair hit logic
-    // Crosshair is column 48, hits the middle half of the box, in front of the wall, within 4 cells
+    // Crosshair is column 48, row 32, in front of the wall, within 4 cells
+    // Hitbox in sprite pixels so it scales with distance, centred on the 48x48 frame:
+    // hiders 24x24 (texels 12..35), hunter 50x50 (texels -1..48)
     localparam [7:0] SHOT_RANGE = 8'd64;
-    wire signed [10:0] cross_rel  = 11'sd48 - box_left;
-    wire signed [10:0] body_start = $signed({6'b000000, box_size[6:2]});
-    wire signed [10:0] body_end   = size_signed - body_start;
-    assign crosshair_hit = visible && !cross_rel[10] &&
-                           (cross_rel >= body_start) && (cross_rel < body_end) &&
+    wire signed [10:0] cross_rel = 11'sd48 - box_left;
+    wire signed [10:0] cross_row = 11'sd32 - $signed({5'b00000, box_top});
+    wire signed [11:0] step_s    = $signed({1'b0, box_step});
+    wire signed [23:0] cross_us  = cross_rel * step_s + $signed({14'd0, box_step[10:1]});
+    wire signed [23:0] cross_vs  = cross_row * step_s + $signed({14'd0, box_step[10:1]});
+    wire signed [15:0] cross_u   = cross_us >>> 8;     // crosshair in sprite texels
+    wire signed [15:0] cross_v   = cross_vs >>> 8;
+    wire signed [15:0] hb_lo     = (box_obj == 2'd0) ? -16'sd1 : 16'sd12;
+    wire signed [15:0] hb_hi     = (box_obj == 2'd0) ?  16'sd49 : 16'sd36;
+    assign crosshair_hit = visible &&
+                           (cross_u >= hb_lo) && (cross_u < hb_hi) &&
+                           (cross_v >= hb_lo) && (cross_v < hb_hi) &&
                            (box_dist < centre_wall_dist) && (box_dist <= SHOT_RANGE);
 
-    assign hit    = in_box && (texel != 4'd0) && (box_dist < wall_dist);
+    assign dist   = box_dist;
+    assign hit    = draw_px && ((texel != 4'd0) || item_px) && (box_dist < wall_dist);
     wire [15:0] base_colour = lit ? sprite_palette_lit[palette_addr] : sprite_palette[palette_addr];
     assign colour = shade_rgb565(base_colour, shade);
 
