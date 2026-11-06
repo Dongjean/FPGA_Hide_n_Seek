@@ -19,13 +19,15 @@ module sprite_billboard (
 
     input        [6:0]  pixel_x,
     input        [5:0]  pixel_y,
+    input               frame_begin,
     input        [7:0]  wall_dist,   // wall distance in this column
     input               lit,         // use the +40 % palette
     input        [7:0]  centre_wall_dist,   // wall distance in column 48
 
     output              hit,         // draw colour instead of the wall
     output       [15:0] colour,
-    output              crosshair_hit
+    output              crosshair_hit,
+    output reg          sprite_visible // at least one sprite texel was drawn in the last OLED frame
 );
 
     `include "trig_LUT.vh"
@@ -165,10 +167,30 @@ module sprite_billboard (
     reg [3:0] texel;
     always @(posedge clk)
         texel <= sprite_texel[sprite_addr];
+    
+    // `visible` only means that the sprite's box is inside the camera's view;
+    // it can still be completely hidden by a wall.  Accumulate hit over
+    // one OLED scan instead, so sprite_visible says that an opaque texel really
+    // passed the wall-depth test and appeared in the rendered 3-D view.
+    // At a new frame boundary, publish the complete previous scan and start the
+    // next one.  Gameplay therefore uses a stable, one-frame-delayed result.
+    reg sprite_seen_this_frame;
+    always @(posedge clk) begin
+        if (reset) begin
+            sprite_seen_this_frame <= 1'b0;
+            sprite_visible         <= 1'b0;
+        end else if (frame_begin) begin
+            sprite_visible         <= sprite_seen_this_frame;
+            sprite_seen_this_frame <= hit;
+        end else if (hit) begin
+            sprite_seen_this_frame <= 1'b1;
+        end
+    end
 
     wire [5:0] palette_addr = {box_frame[4:3], texel};
     wire [4:0] shade = wall_shade_for_distance({2'b00, box_dist});
 
+    // Crosshair hit logic
     // Crosshair is column 48, hits the middle half of the box, in front of the wall, within 4 cells
     localparam [7:0] SHOT_RANGE = 8'd64;
     wire signed [10:0] cross_rel  = 11'sd48 - box_left;

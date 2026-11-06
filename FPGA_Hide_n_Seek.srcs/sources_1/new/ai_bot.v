@@ -32,7 +32,7 @@
 //   sight range (cells)      4      6       8     10
 //   pings after lost for    20 s   12 s    6 s   4 s
 
-module ai_bot
+  module ai_bot
 #(
     parameter integer CLK_HZ       = 6_250_000,
     parameter integer MAP_W        = 10,

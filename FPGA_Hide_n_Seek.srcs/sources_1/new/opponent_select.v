@@ -4,15 +4,20 @@
 //   solo_mode = 0: the other player is on the second Basys3 board (multiplayer_link)
 //   solo_mode = 1: the other player is the AI bot (ai_bot)
 //
+// my_mode (0 = choosing, 1 = singleplayer, 2 = multiplayer) is always sent to the
+// other board, even in solo mode, so it knows when Multiplayer is unavailable.
+//
 // Both sides use exactly the same signals, so the rest of the game works the same
 // in both modes: it sends this player's state and events in, and gets the other
 // player's state and events out.
 //
-// In solo mode the start-up is local: as soon as the player picks a role and
-// presses ready, the game starts with a random seed and the bot takes the other
+// In solo mode the start-up is local: as soon as the player confirms a role on
+// the main menu, the game starts with a random seed and the bot takes the other
 // role. The bot is placed at bot_spawn when `playing` first goes high (after the
-// map has been generated and the countdown has finished).
-
+// map has been generated and the countdown has finished). Game over and the
+// return to the menu are also local, and the bot's hits, freezes and Stims are
+// turned into player-state changes for this player's FSM.
+ 
 module opponent_select
 #(
     parameter integer CLK_HZ = 6_250_000,
@@ -28,7 +33,7 @@ module opponent_select
     input [1:0]difficulty,               // bot difficulty, 0 = easy to 3 = expert
     input link_rx,
     output link_tx,
-
+ 
     // From the rest of the game
     input frame_tick,
     input playing,                       // countdown over and the match is running
@@ -37,17 +42,28 @@ module opponent_select
     input signed [15:0]bot_spawn_y,
     input [3:0]capsule_valid,
     input [31:0]capsule_cells,           // {y, x} per capsule
-
-    // Start-up
-    input [1:0]my_role,                  // 1 = Hider, 2 = Seeker
-    input my_ready,
-    output [1:0]peer_role,
-    output peer_ready,
-    output role_conflict,
+ 
+    // Main menu
+    input [1:0]my_mode,                  // 0 = choosing, 1 = singleplayer, 2 = multiplayer
+    output [1:0]peer_mode,               // the other board's my_mode (0 while the link is down)
+    input [1:0]my_pick,                  // role this player picked: 1 = Hider, 2 = Seeker
+    input my_confirmed,                  // ... and confirmed
+    output [1:0]peer_pick,               // the other player's pick (second board only)
+    output peer_confirmed,
+    output is_master,
+    output master_decided,
+    output [1:0]my_role,                 // this player's role in the match
     output in_game,
     output start_game,
     output [15:0]game_seed,
-
+ 
+    // End of match
+    input ev_game_over,
+    input [1:0]winner_in,                // 1 = Hider won, 2 = Seeker won
+    input ev_menu,
+    output game_over,
+    output [1:0]winner,
+ 
     // This player
     input signed [15:0]my_x,
     input signed [15:0]my_y,
@@ -56,7 +72,7 @@ module opponent_select
     input my_paused,
     input my_frozen,
     input my_stim,
-
+ 
     // The other player
     output signed [15:0]peer_x,
     output signed [15:0]peer_y,
@@ -67,7 +83,7 @@ module opponent_select
     output peer_stim,
     output link_up,                      // board-to-board link status (multiplayer)
     output game_paused,
-
+ 
     // Events this player causes
     input ev_hit,
     input [7:0]hit_damage,
@@ -77,7 +93,9 @@ module opponent_select
     input ev_capsule,
     input [7:0]capsule_id,
     input ev_restart,
-
+    input state_change_valid,            // put the other player's FSM into player_state
+    input [1:0]player_state,
+ 
     // Events the other player causes
     output got_hit,
     output [7:0]got_hit_damage,
@@ -87,7 +105,9 @@ module opponent_select
     output peer_capsule,
     output [7:0]peer_capsule_id,
     output restart_game,
-
+    output got_state_change,             // put my FSM into got_player_state
+    output [1:0]got_player_state,
+ 
     // Radio Pinger reveal (this player is the Seeker)
     output reveal_active,
     output signed [15:0]reveal_x,
@@ -96,10 +116,10 @@ module opponent_select
     localparam [1:0]ROLE_HIDER  = 2'd1;
     localparam [1:0]ROLE_SEEKER = 2'd2;
     localparam integer REVEAL_CLKS = REVEAL_MS * (CLK_HZ / 1000);
-
+ 
     // ---------------- Second board ----------------
-    wire [1:0]l_peer_role;
-    wire l_peer_ready, l_conflict, l_in_game, l_start;
+    wire [1:0]l_peer_pick, l_role, l_winner, l_pstate;
+    wire l_peer_confirmed, l_master, l_decided, l_in_game, l_start, l_game_over, l_state_change;
     wire [15:0]l_seed;
     wire signed [15:0]l_x, l_y;
     wire [7:0]l_dir, l_health;
@@ -107,20 +127,29 @@ module opponent_select
     wire l_got_hit, l_got_frozen, l_got_pinged, l_stim_used, l_capsule, l_restart;
     wire [7:0]l_damage, l_capsule_id;
     wire l_reveal;
-
+ 
     multiplayer_link #(.CLK_HZ(CLK_HZ), .BAUD(BAUD), .REVEAL_MS(REVEAL_MS)) link (
         .clk            (clk),
         .reset          (reset),
         .link_rx        (link_rx),
         .link_tx        (link_tx),
-        .my_role        (my_role),
-        .my_ready       (my_ready && !solo_mode),
-        .peer_role      (l_peer_role),
-        .peer_ready     (l_peer_ready),
-        .role_conflict  (l_conflict),
+        .my_mode        (my_mode),
+        .peer_mode      (peer_mode),
+        .my_pick        (my_pick),
+        .my_confirmed   (my_confirmed && !solo_mode),
+        .peer_pick      (l_peer_pick),
+        .peer_confirmed (l_peer_confirmed),
+        .is_master      (l_master),
+        .master_decided (l_decided),
+        .my_role        (l_role),
         .in_game        (l_in_game),
         .start_game     (l_start),
         .game_seed      (l_seed),
+        .ev_game_over   (ev_game_over && !solo_mode),
+        .winner_in      (winner_in),
+        .ev_menu        (ev_menu && !solo_mode),
+        .game_over      (l_game_over),
+        .winner         (l_winner),
         .my_x           (my_x),
         .my_y           (my_y),
         .my_dir         (my_dir),
@@ -146,6 +175,8 @@ module opponent_select
         .ev_capsule     (ev_capsule && !solo_mode),
         .capsule_id     (capsule_id),
         .ev_restart     (ev_restart && !solo_mode),
+        .state_change_valid (state_change_valid && !solo_mode),
+        .player_state   (player_state),
         .got_hit        (l_got_hit),
         .got_hit_damage (l_damage),
         .got_frozen     (l_got_frozen),
@@ -154,27 +185,31 @@ module opponent_select
         .peer_capsule   (l_capsule),
         .peer_capsule_id(l_capsule_id),
         .restart_game   (l_restart),
+        .got_state_change (l_state_change),
+        .got_player_state (l_pstate),
         .reveal_active  (l_reveal),
         .reveal_x       (),
         .reveal_y       (),
         .rx_error_count (),
         .ev_overflow    ()
     );
-
+ 
     // ---------------- Solo start-up ----------------
     reg s_in_game = 1'b0;
     reg s_start = 1'b0;
+    reg s_start_next = 1'b0;             // s_role is set: start on the next clock
     reg s_restart = 1'b0;
     reg [15:0]s_seed = 16'd1;
-    reg s_armed = 1'b0;
+    reg [1:0]s_role = ROLE_HIDER;
+    reg s_game_over = 1'b0;
+    reg [1:0]s_winner = 2'd0;
     reg [15:0]free_count = 16'd0;
     reg playing_prev = 1'b0;
     reg bot_place = 1'b0;
     reg [31:0]s_reveal = 32'd0;
-
-    wire [1:0]bot_role = (my_role == ROLE_HIDER)  ? ROLE_SEEKER :
-                         (my_role == ROLE_SEEKER) ? ROLE_HIDER  : 2'd0;
-
+ 
+    wire [1:0]bot_role = (s_role == ROLE_HIDER) ? ROLE_SEEKER : ROLE_HIDER;
+ 
     always @(posedge clk) begin
         s_start      <= 1'b0;
         s_restart    <= 1'b0;
@@ -183,31 +218,41 @@ module opponent_select
         playing_prev <= playing;
         if (s_reveal != 32'd0)
             s_reveal <= s_reveal - 32'd1;
-
+ 
         if (reset || !solo_mode) begin
-            s_in_game <= 1'b0;
-            s_armed   <= 1'b0;
-            s_reveal  <= 32'd0;
+            s_in_game    <= 1'b0;
+            s_start_next <= 1'b0;
+            s_game_over  <= 1'b0;
+            s_reveal     <= 32'd0;
         end else begin
-            if (!my_ready && !s_in_game)
-                s_armed <= 1'b1;
-            if (!s_in_game && s_armed && my_ready && my_role != 2'd0) begin
-                s_in_game <= 1'b1;
-                s_start   <= 1'b1;
-                s_seed    <= (free_count == 16'd0) ? 16'd1 : free_count;
+            // Confirming a role on the menu starts the match straight away
+            if (s_start_next) begin
+                s_start_next <= 1'b0;
+                s_in_game    <= 1'b1;
+                s_start      <= 1'b1;
+            end else if (!s_in_game && !s_game_over && my_confirmed && my_pick != 2'd0) begin
+                s_role       <= my_pick;
+                s_seed       <= (free_count == 16'd0) ? 16'd1 : free_count;
+                s_start_next <= 1'b1;
             end
             if (ev_restart) begin
                 s_in_game <= 1'b0;
                 s_restart <= 1'b1;
-                s_armed   <= 1'b0;
             end
+            if (ev_game_over && s_in_game) begin
+                s_in_game   <= 1'b0;
+                s_game_over <= 1'b1;
+                s_winner    <= winner_in;
+            end
+            if (ev_menu && s_game_over)
+                s_game_over <= 1'b0;
             if (playing && !playing_prev)
                 bot_place <= 1'b1;
             if (ev_ping)
                 s_reveal <= REVEAL_CLKS;
         end
     end
-
+ 
     // ---------------- AI bot ----------------
     wire signed [15:0]b_x, b_y;
     wire [7:0]b_dir, b_health;
@@ -215,8 +260,9 @@ module opponent_select
     wire b_got_hit, b_got_frozen, b_got_pinged, b_stim_used, b_capsule;
     wire [7:0]b_damage, b_capsule_id;
     wire s_paused = s_in_game && my_paused;
-
-    ai_bot #(.CLK_HZ(CLK_HZ), .MAP_W(MAP_W), .MAP_H(MAP_H)) bot (
+ 
+    // The bot's freeze lasts as long as the player's stun (player_state_FSM STUN_MS)
+    ai_bot #(.CLK_HZ(CLK_HZ), .MAP_W(MAP_W), .MAP_H(MAP_H), .FREEZE_MS(3000)) bot (
         .clk             (clk),
         .reset           (reset || !solo_mode),
         .enable          (solo_mode && s_in_game && playing && !s_paused),
@@ -250,15 +296,24 @@ module opponent_select
         .peer_capsule_id (b_capsule_id),
         .can_see_player  ()
     );
-
+ 
+    // The bot's actions, as player-state changes for this player:
+    // Freeze Gun -> stunned (1), Seeking Gun hit -> attacked (3), Stim / Flashbang -> flashed (2)
+    wire b_state_change = b_got_frozen || b_got_hit || b_stim_used;
+    wire [1:0]b_pstate  = b_got_frozen ? 2'd1 : b_got_hit ? 2'd3 : 2'd2;
+ 
     // ---------------- Choose the source ----------------
-    assign peer_role       = solo_mode ? bot_role     : l_peer_role;
-    assign peer_ready      = solo_mode ? 1'b1         : l_peer_ready;
-    assign role_conflict   = solo_mode ? 1'b0         : l_conflict;
+    assign peer_pick       = solo_mode ? 2'd0         : l_peer_pick;
+    assign peer_confirmed  = solo_mode ? 1'b0         : l_peer_confirmed;
+    assign is_master       = solo_mode ? 1'b1         : l_master;
+    assign master_decided  = solo_mode ? 1'b1         : l_decided;
+    assign my_role         = solo_mode ? s_role       : l_role;
     assign in_game         = solo_mode ? s_in_game    : l_in_game;
     assign start_game      = solo_mode ? s_start      : l_start;
     assign game_seed       = solo_mode ? s_seed       : l_seed;
-
+    assign game_over       = solo_mode ? s_game_over  : l_game_over;
+    assign winner          = solo_mode ? s_winner     : l_winner;
+ 
     assign peer_x          = solo_mode ? b_x          : l_x;
     assign peer_y          = solo_mode ? b_y          : l_y;
     assign peer_dir        = solo_mode ? b_dir        : l_dir;
@@ -267,7 +322,7 @@ module opponent_select
     assign peer_frozen     = solo_mode ? b_frozen     : l_frozen;
     assign peer_stim       = solo_mode ? b_stim       : l_stim;
     assign game_paused     = solo_mode ? s_paused     : l_game_paused;
-
+ 
     assign got_hit         = solo_mode ? b_got_hit    : l_got_hit;
     assign got_hit_damage  = solo_mode ? b_damage     : l_damage;
     assign got_frozen      = solo_mode ? b_got_frozen : l_got_frozen;
@@ -276,7 +331,9 @@ module opponent_select
     assign peer_capsule    = solo_mode ? b_capsule    : l_capsule;
     assign peer_capsule_id = solo_mode ? b_capsule_id : l_capsule_id;
     assign restart_game    = solo_mode ? s_restart    : l_restart;
-
+    assign got_state_change = solo_mode ? b_state_change : l_state_change;
+    assign got_player_state = solo_mode ? b_pstate       : l_pstate;
+ 
     assign reveal_active   = solo_mode ? (s_reveal != 32'd0) : l_reveal;
     assign reveal_x        = peer_x;
     assign reveal_y        = peer_y;

@@ -25,6 +25,7 @@ module player_state_FSM
 
     // Current state + effects
     output reg [1:0]  state,
+    
     output            can_act,
     output            screen_white,
     output            screen_red

@@ -26,6 +26,7 @@ module Raycast_3D_Engine
     input [7:0]spr_facing,
     
     output crosshair_hit,
+    output sprite_visible, // enemy had at least one visible texel in the last rendered frame
     
     output reg [15:0]pixel_data
 );
@@ -303,12 +304,14 @@ module Raycast_3D_Engine
         .spr_facing (spr_facing),
         .pixel_x    (pixel_x),
         .pixel_y    (pixel_y),
+        .frame_begin(frame_begin),
         .wall_dist  (selected_dist),
         .lit        (1'b0),
         .centre_wall_dist (centre_wall_dist),
         .hit        (sprite_hit),
         .colour     (sprite_colour),
-        .crosshair_hit (crosshair_hit)
+        .crosshair_hit (crosshair_hit), // Where the crosshair hit logic is output
+        .sprite_visible(sprite_visible)
     );
 
     always @(*) begin
