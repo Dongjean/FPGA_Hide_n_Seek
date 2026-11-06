@@ -26,11 +26,7 @@
 //             So the row always shows the SAME weapon as the number above it.
 //   y 47..56  time left as M:SS (max 5:00) at 2x; white, red under 30 s
 //
-// Hearts from health: Jian Bin's core still counts 0..100 (-20 per hit).  Until it
-// counts 0..3 (new spec), health above 3 is scaled: 1..34 -> 1, 35..67 -> 2,
-// 68..100 -> 3.  Health 0..3 is used as the heart count directly, so the HUD
-// is already right when the core changes to 3 HP.
-//
+
 // Timing: like minimap_render, pixel_data is combinational from pixel_index
 // (160 ns budget).  Everything that depends only on the game state (digits of
 // the time, hearts, pips, which icon) is registered first, so the per-pixel
