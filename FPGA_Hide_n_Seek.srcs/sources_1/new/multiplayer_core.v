@@ -124,6 +124,8 @@ module multiplayer_core
  
     // Hooks for the rest of the team
     input renderer_hit,                // with SIMPLE_AIM = 0: crosshair_hit from the renderer
+    input [1:0]my_hand,                // held item: 0 empty, 1 gun, 2 item
+    output [1:0]op_hand,
     input my_stim,                     // Stim Shot active on me
     output peer_stim_used,
     input [3:0]capsule_valid,          // Time Capsules for the bot to look at
@@ -347,6 +349,7 @@ module multiplayer_core
         .my_paused       (my_pause),
         .my_frozen       (my_frozen),
         .my_stim         (my_stim),
+        .my_hand         (my_hand),
         .peer_x          (op_x),
         .peer_y          (op_y),
         .peer_dir        (op_dir),
@@ -354,6 +357,7 @@ module multiplayer_core
         .peer_paused     (),
         .peer_frozen     (op_frozen),
         .peer_stim       (),
+        .peer_hand       (op_hand),
         .link_up         (link_up),
         .game_paused     (game_paused),
         .ev_hit          (ev_hit),
