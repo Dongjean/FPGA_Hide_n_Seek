@@ -8,11 +8,15 @@
 //    board that has already decided takes the other job, and if both ever claim
 //    the same job, the nonce settles it.
 //
-// 2. Main menu: each player confirms a role (my_pick, my_confirmed). The other
-//    board's choice appears on peer_pick / peer_confirmed. Once both have
-//    confirmed different roles, the master picks a random map seed and sends
-//    START. Both boards then pulse start_game with the same game_seed and set
-//    my_role for the match.
+// 2. Main menu: each board sends its game mode (my_mode: 0 = still choosing,
+//    1 = singleplayer, 2 = multiplayer) in every STATE; the other board's mode
+//    appears on peer_mode (0 while the link is down). In multiplayer, as soon as
+//    EITHER player confirms a role (my_pick, my_confirmed / peer_pick,
+//    peer_confirmed) the master picks a random map seed and sends START with its
+//    own role: the confirmed player gets the role they picked and the other
+//    player gets the other one. If both confirm at the same moment the master's
+//    pick wins. Both boards then pulse start_game with the same game_seed and
+//    set my_role for the match.
 //
 // 3. State: every STATE_MS each board sends its player's position, direction,
 //    health and status flags. The other board's copy appears on the peer_* outputs.
@@ -38,7 +42,7 @@
 //    REVEAL_MS, while reveal_x/reveal_y give the Hider's live position for the minimap.
 //    The Hider's board gets got_pinged so it can warn the player.
 //
-// Packets:  STATE 0x10 (10 bytes), EVENT 0x20 (4 bytes: code, arg low, arg high, arg2),
+// Packets:  STATE 0x10 (11 bytes), EVENT 0x20 (4 bytes: code, arg low, arg high, arg2),
 //           ACK 0x21 (1 byte: sequence number being acknowledged)
  
 module multiplayer_link
@@ -57,6 +61,8 @@ module multiplayer_link
     output link_tx,
  
     // Main menu
+    input [1:0]my_mode,                    // 0 = choosing, 1 = singleplayer, 2 = multiplayer
+    output reg [1:0]peer_mode = 2'd0,      // the other board's my_mode (0 while the link is down)
     input [1:0]my_pick,                    // role this player has picked: 1 = Hider, 2 = Seeker
     input my_confirmed,                    // this player has confirmed my_pick
     output reg [1:0]peer_pick = 2'd0,      // role the other player has picked
@@ -146,7 +152,9 @@ module multiplayer_link
     localparam [7:0]EV_MENU      = 8'd9;
     localparam [7:0]EV_PSTATE    = 8'd10;
  
-    localparam integer MAX_LEN     = 10;
+    localparam [1:0]MODE_MULTI  = 2'd2;
+
+    localparam integer MAX_LEN     = 11;
     localparam integer CLKS_PER_MS = CLK_HZ / 1000;
     localparam integer RETRY_CLKS  = RETRY_MS * CLKS_PER_MS;
     localparam integer REVEAL_CLKS = REVEAL_MS * CLKS_PER_MS;
@@ -317,6 +325,7 @@ module multiplayer_link
             reveal_count    <= 32'd0;
             peer_pick       <= 2'd0;
             peer_confirmed  <= 1'b0;
+            peer_mode       <= 2'd0;
             peer_in_game    <= 1'b0;
             peer_paused     <= 1'b0;
             sec_count       <= 32'd0;
@@ -346,22 +355,23 @@ module multiplayer_link
                     send_type    <= TYPE_ACK;
                     send_seq     <= 8'd0;
                     send_len     <= 8'd1;
-                    send_payload <= {72'd0, ack_seq};
+                    send_payload <= {80'd0, ack_seq};
                     ack_pending  <= 1'b0;
                 end else if (ev_send_req && fresh_announced) begin
                     send         <= 1'b1;
                     send_type    <= TYPE_EVENT;
                     send_seq     <= ev_seq;
                     send_len     <= 8'd4;
-                    send_payload <= {48'd0, head_arg2, head_arg[15:8], head_arg[7:0], head_code};
+                    send_payload <= {56'd0, head_arg2, head_arg[15:8], head_arg[7:0], head_code};
                     ev_send_req  <= 1'b0;
                     retry_count  <= 32'd0;
                 end else if (state_due || !fresh_announced) begin
                     send         <= 1'b1;
                     send_type    <= TYPE_STATE;
                     send_seq     <= 8'd0;
-                    send_len     <= 8'd10;
-                    send_payload <= {uptime_s[15:8], uptime_s[7:0],
+                    send_len     <= 8'd11;
+                    send_payload <= {6'd0, my_mode,
+                                     uptime_s[15:8], uptime_s[7:0],
                                      master_decided, is_master, nonce_set, nonce,
                                      in_game, my_paused, my_frozen, my_stim, my_confirmed, fresh_boot, role_field,
                                      my_health, my_dir, my_y[15:8], my_y[7:0], my_x[15:8], my_x[7:0]};
@@ -407,6 +417,7 @@ module multiplayer_link
             if (!link_up) begin
                 have_peer_state <= 1'b0;
                 peer_confirmed  <= 1'b0;
+                peer_mode       <= 2'd0;
             end
  
             if (rx_valid) begin
@@ -428,6 +439,7 @@ module multiplayer_link
                         peer_master     <= rx_payload[62];
                         peer_decided    <= rx_payload[63];
                         peer_uptime     <= {rx_payload[79:72], rx_payload[71:64]};
+                        peer_mode       <= rx_payload[81:80];
                         have_peer_state <= 1'b1;
                         if (rx_payload[50] && !peer_fresh)
                             have_rx_seq <= 1'b0;     // the other board rebooted
@@ -604,14 +616,18 @@ module multiplayer_link
                 game_over       <= 1'b0;
                 start_requested <= 1'b0;
             end
- 
-            // The master starts the match once both players have confirmed different roles
+
+
+            // Multiplayer: the master starts the match as soon as either player has
+            // confirmed a role. The confirmed player keeps their pick (the master's
+            // pick wins a tie); the slave takes whichever role the master did not.
             if (!in_game && !game_over && !start_next && !start_requested && link_up &&
-                master_decided && is_master && my_confirmed && peer_confirmed &&
-                my_pick != 2'd0 && peer_pick != 2'd0 && my_pick != peer_pick) begin
+                master_decided && is_master &&
+                my_mode == MODE_MULTI && peer_mode == MODE_MULTI &&
+                ((my_confirmed && my_pick != 2'd0) || (peer_confirmed && peer_pick != 2'd0))) begin
                 p_start         <= 1'b1;
                 arg_start       <= (free_count == 16'd0) ? 16'd1 : free_count;
-                arg_start_role  <= my_pick;
+                arg_start_role  <= (my_confirmed && my_pick != 2'd0) ? my_pick : other_role(peer_pick);
                 start_requested <= 1'b1;
             end
  

@@ -16,9 +16,20 @@
 //   got_state_change / got_player_state out -> player_state_FSM set_valid / set_state
 //
 // Screens (game_state): 0 = main menu, 1 = playing, 2 = end screen.
-//   Menu:    btnL = Hider, btnR = Seeker, btnC = confirm. A role the other player
-//            has confirmed cannot be picked. The match starts when both players
-//            have confirmed (solo: as soon as I confirm).
+//   The main menu has two pages:
+//   Mode page: btnU / btnD highlight MULTIPLAYER / SINGLEPLAYER, btnC selects.
+//            - Choosing SINGLEPLAYER locks MULTIPLAYER on the other board until
+//              I come back to this page.
+//            - Choosing MULTIPLAYER takes the other board to multiplayer as well.
+//            - MULTIPLAYER also needs the link to be up.
+//   Role page: btnL = Hider, btnR = Seeker, btnC = confirm, btnD = back to the
+//            mode page (in multiplayer this takes the other board back too).
+//            - Multiplayer: the first player to confirm a role starts the match;
+//              the other player gets the other role.
+//            - Singleplayer: confirming starts the match against the AI bot,
+//              which takes the other role.
+//   After a match (end screen, or an abandoned match) both boards go back to
+//   the mode page.
 //   Playing: btnU/btnD walk, btnL/btnR turn, btnC shoot.
 //            Flip sw[15] to pause both boards; only the player who paused can
 //            resume, with btnC. Hold btnD 2 s while paused = abandon the match.
@@ -29,12 +40,11 @@
 //   sw[1:0]   weapon (0 = gun, 1 = Pinger for the Seeker / Stim for the Hider)
 //   sw[9]     7-segment shows USB device debugging instead of health
 //   sw[11:10] bot difficulty, 0 = easy .. 3 = expert
-//   sw[12]    1 = play the AI bot, 0 = play the other board (wire on JA)
 //   sw[15]    pause (flip either way)
 //
 // LEDs: 15 in game, 14 link up, 13 mouse, 12 keyboard, 11 reveal, 10 I'm stunned,
 //   9 master board, 8 game paused, 7 I paused, 6 other player confirmed,
-//   5 I confirmed, 4 flips when I'm hit, 1:0 weapon.
+//   5 I confirmed, 4 flips when I'm hit, 3:2 game mode (01 single, 10 multi), 1:0 weapon.
 // 7-segment: my health (left two digits), other player's health (right two), hex.
 //
 // Hits: with SIMPLE_AIM = 0 a gun shot hits when the renderer says the other
@@ -99,6 +109,11 @@ module multiplayer_core
     output [1:0]my_role,               // 1 = Hider, 2 = Seeker (on the menu: the highlighted role)
     output [1:0]menu_pick,             // menu: highlighted role
     output menu_confirmed,             // menu: I have confirmed menu_pick
+    output [1:0]game_mode,             // 0 = mode page, 1 = singleplayer, 2 = multiplayer
+    output solo_mode,                  // playing (or about to play) the AI bot
+    output mode_cursor,                // mode page highlight: 0 = Multiplayer, 1 = Singleplayer
+    output mp_available,               // Multiplayer can be picked (link up, other board not in solo)
+    output peer_in_solo,               // the other board chose Singleplayer
     output peer_confirmed,             // menu: the other player has confirmed (the other role)
     output is_master,
     output [1:0]winner,                // end screen: 1 = Hider won, 2 = Seeker won
@@ -194,35 +209,94 @@ module multiplayer_core
     endfunction
  
     // ---------------- Main menu ----------------
-    // btnL / btnR (or mouse / keyboard turning) highlight Hider / Seeker, btnC confirms
+    localparam [1:0]MODE_NONE  = 2'd0;   // on the mode page
+    localparam [1:0]MODE_SOLO  = 2'd1;
+    localparam [1:0]MODE_MULTI = 2'd2;
+
+    reg [1:0]mode = MODE_NONE;
+    reg cursor_solo = 1'b0;            // mode page: 0 = Multiplayer, 1 = Singleplayer highlighted
     reg [1:0]pick = ROLE_HIDER;
     reg confirmed = 1'b0;
-    reg turn_left_prev = 1'b0;
-    reg turn_right_prev = 1'b0;
-    wire link_ready = sw[12] || (link_up && master_decided);
-    wire pick_taken = peer_confirmed && (peer_pick == pick);   // the other player has this role
- 
+    
+    wire [1:0]peer_mode;               // the other board's mode (0 while the link is down)
+
+    wire solo       = (mode == MODE_SOLO);
+    wire peer_multi = (peer_mode == MODE_MULTI);
+    wire mp_ok      = link_up && master_decided && (peer_mode != MODE_SOLO);
+    wire in_match   = in_game || game_over;
+
+    reg peer_multi_prev = 1'b0;
+    reg in_match_prev = 1'b0;
+    reg fwd_prev = 1'b0, back_prev = 1'b0;
+    reg turn_left_prev = 1'b0, turn_right_prev = 1'b0;
+    wire up_press    = move_forward  && !fwd_prev;
+    wire down_press  = move_backward && !back_prev;
+    wire left_press  = turn_left     && !turn_left_prev;
+    wire right_press = turn_right    && !turn_right_prev;
+
     always @(posedge clk) begin
+        fwd_prev        <= move_forward;
+        back_prev       <= move_backward;
         turn_left_prev  <= turn_left;
         turn_right_prev <= turn_right;
-        if (reset_game || !in_menu || !link_ready) begin
+        peer_multi_prev <= peer_multi;
+        in_match_prev   <= in_match;
+
+        if (reset_game) begin
+            mode        <= MODE_NONE;
+            cursor_solo <= 1'b0;
+            confirmed   <= 1'b0;
+        end else if (in_match) begin
             confirmed <= 1'b0;
-        end else if (!confirmed) begin
-            if (turn_left && !turn_left_prev)
-                pick <= ROLE_HIDER;
-            else if (turn_right && !turn_right_prev)
-                pick <= ROLE_SEEKER;
-            else if (pick_taken)
-                pick <= other_role(pick);
-            else if (shoot)
-                confirmed <= 1'b1;
-        end else if (pick_taken && !is_master) begin
-            // Both confirmed the same role at the same moment: the master keeps it
+            // The other board started a multiplayer match (START from the master)
+            if (start_game && !solo)
+                mode <= MODE_MULTI;
+        end else if (in_match_prev) begin
+            // Back from a match (end screen or abandoned): start again at the mode page
+            mode      <= MODE_NONE;
             confirmed <= 1'b0;
-            pick      <= other_role(pick);
+        end else if (mode == MODE_NONE) begin
+            // ---- Mode page ----
+            confirmed <= 1'b0;
+            if (!mp_ok)
+                cursor_solo <= 1'b1;                   // Multiplayer is greyed out
+            else if (up_press)
+                cursor_solo <= 1'b0;
+            else if (down_press)
+                cursor_solo <= 1'b1;
+
+            if (peer_multi && !peer_multi_prev && mp_ok)
+                mode <= MODE_MULTI;                    // the other board chose Multiplayer: follow it
+            else if (shoot) begin
+                if (cursor_solo)
+                    mode <= MODE_SOLO;
+                else if (mp_ok)
+                    mode <= MODE_MULTI;
+            end
+        end else begin
+            // ---- Role page ----
+            if (mode == MODE_MULTI && (!mp_ok || (peer_multi_prev && !peer_multi))) begin
+                // Link lost, the other board went to Singleplayer, or it went back
+                mode      <= MODE_NONE;
+                confirmed <= 1'b0;
+            end else if (!confirmed) begin
+                if (down_press)
+                    mode <= MODE_NONE;                 // back to the mode page
+                else if (left_press)
+                    pick <= ROLE_HIDER;
+                else if (right_press)
+                    pick <= ROLE_SEEKER;
+                else if (shoot)
+                    confirmed <= 1'b1;                 // starts the match (see opponent_select / multiplayer_link)
+            end
         end
     end
  
+    assign game_mode    = mode;
+    assign solo_mode    = solo;
+    assign mode_cursor  = cursor_solo;
+    assign mp_available = mp_ok;
+    assign peer_in_solo = (peer_mode == MODE_SOLO);
     assign menu_pick      = pick;
     assign menu_confirmed = confirmed;
     assign my_role        = in_menu ? pick : match_role;
@@ -302,7 +376,7 @@ module multiplayer_core
  
     // The Hider's board judges its own health; against the bot, I judge the bot's
     wire hider_dead   = (match_role == ROLE_HIDER  && my_health == 8'd0) ||
-                        (sw[12] && match_role == ROLE_SEEKER && op_health == 8'd0);
+                        (solo && match_role == ROLE_SEEKER && op_health == 8'd0);
     wire ev_game_over = live && (hider_dead || time_up);
     wire [1:0]winner_in = hider_dead ? ROLE_SEEKER : ROLE_HIDER;
     wire ev_menu      = game_over && shoot;      // btnC on the end screen
@@ -314,7 +388,7 @@ module multiplayer_core
     opponent_select #(.CLK_HZ(CLK_HZ)) other_player (
         .clk             (clk),
         .reset           (reset_game),
-        .solo_mode       (sw[12]),
+        .solo_mode       (solo),
         .difficulty      (sw[11:10]),
         .link_rx         (link_rx),
         .link_tx         (link_tx),
@@ -325,6 +399,8 @@ module multiplayer_core
         .bot_spawn_y     (bot_spawn_y),
         .capsule_valid   (capsule_valid),
         .capsule_cells   (capsule_cells),
+        .my_mode         (mode),
+        .peer_mode       (peer_mode),
         .my_pick         (pick),
         .my_confirmed    (confirmed),
         .peer_pick       (peer_pick),
@@ -397,7 +473,7 @@ module multiplayer_core
     // ---------------- LEDs and 7-segment ----------------
     assign led = {in_game, link_up, mouse_present, keyboard_present, reveal_active, my_frozen,
                   is_master, game_paused, my_pause, peer_confirmed, confirmed, hit_toggle,
-                  2'd0, weapon_sel};
+                  mode, weapon_sel};
  
     seven_segment_display #(.CLK_HZ(CLK_HZ)) status_display (
         .clk   (clk),
