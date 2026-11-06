@@ -93,6 +93,8 @@ module multiplayer_core
     output my_frozen,
  
     // Match
+    input has_ammo,
+    input has_uses,
     output [1:0]game_state,            // 0 = menu, 1 = playing, 2 = end, same on both boards
     output [1:0]my_role,               // 1 = Hider, 2 = Seeker (on the menu: the highlighted role)
     output [1:0]menu_pick,             // menu: highlighted role
@@ -271,8 +273,8 @@ module multiplayer_core
     endfunction
  
     wire can_act  = can_move;
-    wire fire_gun = shoot && can_act && weapon_sel[0] == 1'b0;
-    wire use_item = shoot && can_act && weapon_sel[0] == 1'b1;
+    wire fire_gun = shoot && can_act && weapon_sel[0] == 1'b0 && has_ammo;
+    wire use_item = shoot && can_act && weapon_sel[0] == 1'b1 && has_uses;
     wire hit      = (SIMPLE_AIM != 0) ? (fire_gun && on_target) : (fire_gun && renderer_hit);
     wire ev_hit    = hit && seeker;      // Seeker's gun damages the Hider
     wire ev_freeze = hit && !seeker;     // Hider's Freeze Gun freezes the Seeker

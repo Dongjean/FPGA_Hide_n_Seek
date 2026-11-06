@@ -156,6 +156,8 @@ module My_Top_Module (
     wire [3:0]         ammo;                 // 0..10 (Seeker pistol) / 0..5 (Freeze Gun)
     wire [2:0]         uses;                 // 0..5 (Pinger / Flashbang)
     wire               fired_gun;
+    wire               has_ammo;
+    wire               has_uses;
  
     world_top #(.LOOP_WALLS(3)) world (
         .clk           (oled_clk),
@@ -284,8 +286,8 @@ module My_Top_Module (
         .can_move     (can_move),
         .ammo         (ammo),
         .uses         (uses),
-        .has_ammo     (),
-        .has_use      (),
+        .has_ammo     (has_ammo),
+        .has_use      (has_uses),
         .fired_gun    (fired_gun),
         .used_item    ()
     );
@@ -322,6 +324,8 @@ module My_Top_Module (
         .my_dir          (view_dir),
         .my_health       (my_health),
         .my_frozen       (my_frozen),
+        .has_ammo        (has_ammo),
+        .has_uses        (has_uses),
         .game_state      (game_state),
         .my_role         (my_role),
         .menu_pick       (menu_pick),
@@ -393,8 +397,7 @@ module My_Top_Module (
     // enemy_hit_valid / enemy_hit_state are the pulse + state for the link to send later
     // NOTE: not connected to the other board yet.
 
-    // Crosshair + crowd control dealt to the enemy
-    wire        crosshair_hit;              // renderer: enemy sprite is under the crosshair
+    // Crowd control dealt to the enemy
     wire [1:0]  enemy_playerstate;          // 0 normal, 1 stunned, 2 blinded, 3 damaged
     wire        enemy_hit_valid;            // 1-cycle: a crowd-control shot landed (for the link, later)
     wire [1:0]  enemy_hit_state;            // state that shot puts the enemy in
