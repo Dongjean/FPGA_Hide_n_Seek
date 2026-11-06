@@ -97,6 +97,7 @@ module My_Top_Module (
     wire got_state_change;                  // link -> player_state_FSM
     wire [1:0]got_player_state;
     wire my_stunned;
+    wire map_ready;                         // world_top: map finished (the bot waits for it)
  
     // ================= Andrew: world generation =================
     // A new maze is built on every start_game, from the shared game_seed, so both
@@ -181,7 +182,7 @@ module My_Top_Module (
         .cells         (cells),
         .map_bits      (map_bits),
         .gen_busy      (),
-        .map_ready     (),
+        .map_ready     (map_ready),
         .map_done      (map_done),
         .load_pos      (load_pos),
         .load_x        (load_x),
@@ -311,6 +312,7 @@ module My_Top_Module (
         .bot_spawn_y     (bot_spawn_y),
         .time_up         (time_up),
         .my_stunned      (my_stunned),
+        .map_ready       (map_ready),
         .move_forward    (move_forward),
         .move_backward   (move_backward),
         .turn_left       (turn_left),
@@ -352,8 +354,7 @@ module My_Top_Module (
         .got_state_change (got_state_change),
         .got_player_state (got_player_state),
         .renderer_hit    (crosshair_hit),
-        .my_stim         (1'b0),
-        .peer_stim_used  (peer_flash),       // the Hider used a Flashbang (Stim event reused)
+        .peer_flash_used (peer_flash),       // the Hider used a Flashbang (Stim event reused)
         .capsule_valid   (capsule_valid),    // the bot (Hider) can see and shoot capsules
         .capsule_cells   (capsule_cells),
         .ev_capsule      (ev_capsule),       // I shot a capsule -> other board
@@ -430,14 +431,16 @@ module My_Top_Module (
     wire [15:0] game_view_pixel = xhair_draw ? xhair_colour : game_pixel_data;
 
     // Decide what to display based on the game state
-    wire [15:0] base_pixel = (game_state == STATE_PLAYING) ? game_view_pixel : ui_pixel_data;
+    wire show_pause = (game_state == STATE_PLAYING) && game_paused;   // pause screen instead of the 3D view
+    wire [15:0] base_pixel = (game_state == STATE_PLAYING && !game_paused) ? game_view_pixel : ui_pixel_data;
     
     // red_pixel is when attacked
     // Push red up, halve green/blue to have a red filter effect
     wire [15:0] red_pixel  = {base_pixel[15:11] | 5'b11000, 1'b0, base_pixel[10:6], 1'b0, base_pixel[4:1]};
     
     // When flashed, solid white screen
-    assign pixel_data = screen_white ? 16'hFFFF :
+    assign pixel_data = show_pause   ? base_pixel :
+                        screen_white ? 16'hFFFF :
                         screen_red   ? red_pixel : base_pixel;
     
     // Oled Display module
@@ -475,6 +478,10 @@ module My_Top_Module (
         .clk         (oled_clk),
         .frame_begin (frame_begin),
         .state       (game_state),
+        .winner      (winner),
+        .game_paused (game_paused),
+        .i_paused    (paused),
+        .link_up     (link_up),
         .pixel_index (pixel_index),
         .pixel_data  (ui_pixel_data)
     );
@@ -625,7 +632,7 @@ module My_Top_Module (
  
 //    assign pixel_data2 = in_minimap ? minimap_pixel : hud_pixel;
  
-    assign pixel_data2 = screen_white ? 16'hFFFF : (in_minimap ? minimap_pixel : hud_pixel);
+    assign pixel_data2 = (screen_white && !game_paused) ? 16'hFFFF : (in_minimap ? minimap_pixel : hud_pixel);
  
 //    // Enemy Player Movement Module
 //    player_movement #(
