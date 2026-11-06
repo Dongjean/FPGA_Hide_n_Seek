@@ -169,6 +169,7 @@ module sprite_billboard (
     wire [5:0] palette_addr = {box_frame[4:3], texel};
     wire [4:0] shade = wall_shade_for_distance({2'b00, box_dist});
 
+    // Crosshair hit logic
     // Crosshair is column 48, hits the middle half of the box, in front of the wall, within 4 cells
     localparam [7:0] SHOT_RANGE = 8'd64;
     wire signed [10:0] cross_rel  = 11'sd48 - box_left;
