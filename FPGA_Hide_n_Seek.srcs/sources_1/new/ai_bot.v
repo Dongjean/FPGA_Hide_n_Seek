@@ -13,10 +13,11 @@ module ai_bot
     parameter integer FLASH_MS     = 2000,
     parameter integer COOLDOWN_MS  = 800,
     parameter integer ALERT_MS     = 3000,
-    parameter [3:0]SEEKER_AMMO     = 4'd10,
-    parameter [2:0]SEEKER_PINGS    = 3'd5,
-    parameter [3:0]HIDER_AMMO      = 4'd5,
-    parameter [2:0]HIDER_FLASHES   = 3'd5
+    parameter [3:0]SEEKER_AMMO     = 4'd10,      // Seeking Gun bullets
+    parameter integer RECHARGE_MS  = 10000,      // tTime per recharged bullet for Seeking Gun (same as item_counters)
+    parameter [2:0]SEEKER_PINGS    = 3'd5,       // Radio Pinger uses
+    parameter [3:0]HIDER_AMMO      = 4'd5,       // Freeze Gun bullets
+    parameter [2:0]HIDER_FLASHES   = 3'd5        // Flashbang uses
 )
 (
     input clk,
@@ -138,6 +139,7 @@ module ai_bot
     reg [15:0]lost_ms = 16'd0;
     reg [15:0]cooldown_ms = 16'd0;
     reg [3:0]ammo = 4'd10;
+    reg [13:0]recharge_ms = 14'd0;   // Time since the last recharged Seeking Gun bullet
     reg [2:0]pings_left = 3'd5;
     reg [2:0]flashes_left = 3'd5;
 
@@ -145,7 +147,15 @@ module ai_bot
     assign bot_holding = {(ammo == 4'd0), 1'b0};
     wire dead = (bot_health == 8'd0);
 
-    //Pathfinding engine
+    // Seeker pistol recharge, same rule as item_counters for the human Seeker
+    // The timer runs only while the pistol is below full and the bot can act (not frozen / dead),
+    // and a bullet comes back every RECHARGE_MS
+    // recharge_tick is also folded into the shot's ammo update below so a shot on the same cycle does not swallow the bullet
+    wire recharge_run  = (bot_role == ROLE_SEEKER) && (ammo < SEEKER_AMMO);
+    wire recharge_tick = ms_tick && recharge_run && !bot_frozen && !dead &&
+                         (recharge_ms == RECHARGE_MS - 1);
+
+    // Pathfinding Engine
     reg bfs_start = 1'b0;
     reg [3:0]bfs_src_x, bfs_src_y;
     wire bfs_done;
@@ -288,6 +298,7 @@ module ai_bot
             lost_ms      <= 16'd0;
             cooldown_ms  <= 16'd0;
             ammo         <= (bot_role == ROLE_SEEKER) ? SEEKER_AMMO : HIDER_AMMO;
+            recharge_ms  <= 14'd0;
             pings_left   <= SEEKER_PINGS;
             flashes_left <= HIDER_FLASHES;
             known        <= 1'b0;
@@ -304,6 +315,9 @@ module ai_bot
                 if (flash_cd_ms != 0) flash_cd_ms <= flash_cd_ms - 16'd1;
                 if (alert_ms != 0)    alert_ms    <= alert_ms - 16'd1;
                 if (cooldown_ms != 0) cooldown_ms <= cooldown_ms - 16'd1;
+                if (!recharge_run || recharge_tick) recharge_ms <= 14'd0;
+                else if (!bot_frozen && !dead)      recharge_ms <= recharge_ms + 14'd1;
+                if (recharge_tick) ammo <= ammo + 4'd1;
                 if (can_see_player) begin
                     if (seen_ms != 16'hFFFF) seen_ms <= seen_ms + 16'd1;
                     lost_ms <= 16'd0;
@@ -536,7 +550,7 @@ module ai_bot
                     if (!bot_frozen && seen_ms >= reaction_ms + {6'd0, react_extra} && cooldown_ms == 16'd0) begin
                         if (bot_role == ROLE_SEEKER) begin
                             if (can_see_player && ammo != 4'd0) begin
-                                ammo        <= ammo - 4'd1;
+                                ammo        <= ammo - 4'd1 + {3'd0, recharge_tick};
                                 cooldown_ms <= COOLDOWN_MS;
                                 if (lfsr[15:8] < accuracy) begin
                                     got_hit        <= 1'b1;
