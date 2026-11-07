@@ -74,7 +74,7 @@ module opponent_select
     input [7:0]my_health,
     input my_paused,
     input my_frozen,
-
+    input [1:0]my_hand,
     // The other player
     output signed [15:0]peer_x,
     output signed [15:0]peer_y,
@@ -82,6 +82,7 @@ module opponent_select
     output [7:0]peer_health,
     output peer_paused,
     output peer_frozen,
+    output [1:0]peer_hand,               // the bot always has its gun ready
     output link_up,                      // board-to-board link status (multiplayer)
     output game_paused,
 
@@ -124,8 +125,9 @@ module opponent_select
     wire [15:0]l_seed;
     wire signed [15:0]l_x, l_y;
     wire [7:0]l_dir, l_health;
-    wire l_paused, l_frozen, l_game_paused;
-    wire l_got_hit, l_got_frozen, l_got_pinged, l_flash_used, l_capsule, l_restart;
+    wire l_paused, l_frozen, l_stim, l_game_paused;
+    wire [1:0]l_hand;
+    wire l_got_hit, l_got_frozen, l_got_pinged, l_stim_used, l_capsule, l_restart;
     wire [7:0]l_damage, l_capsule_id;
     wire l_reveal;
 
@@ -157,6 +159,8 @@ module opponent_select
         .my_health      (my_health),
         .my_paused      (my_paused),
         .my_frozen      (my_frozen),
+        .my_hand        (my_hand),
+        .peer_hand      (l_hand),
         .peer_x         (l_x),
         .peer_y         (l_y),
         .peer_dir       (l_dir),
@@ -331,6 +335,7 @@ module opponent_select
     assign peer_health     = solo_mode ? b_health     : l_health;
     assign peer_paused     = solo_mode ? 1'b0         : l_paused;
     assign peer_frozen     = solo_mode ? b_frozen     : l_frozen;
+    assign peer_hand       = solo_mode ? 2'd1         : l_hand;
     assign game_paused     = solo_mode ? s_paused     : l_game_paused;
 
     assign got_hit         = solo_mode ? b_got_hit    : l_got_hit;

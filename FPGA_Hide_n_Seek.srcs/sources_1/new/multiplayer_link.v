@@ -42,7 +42,7 @@
 //    REVEAL_MS, while reveal_x/reveal_y give the Hider's live position for the minimap.
 //    The Hider's board gets got_pinged so it can warn the player.
 //
-// Packets:  STATE 0x10 (11 bytes), EVENT 0x20 (4 bytes: code, arg low, arg high, arg2),
+// Packets:  STATE 0x10 (11 bytes; byte 10 = {4'b0, hand, mode}), EVENT 0x20 (4 bytes: code, arg low, arg high, arg2),
 //           ACK 0x21 (1 byte: sequence number being acknowledged)
 
 module multiplayer_link
@@ -87,7 +87,8 @@ module multiplayer_link
     input [7:0]my_dir,
     input [7:0]my_health,
     input my_paused,
-    input my_frozen,
+    input my_frozen,  
+    input [1:0]my_hand,                    // held item: 0 empty, 1 gun, 2 item
 
     // The other board's player
     output reg signed [15:0]peer_x = 16'sd0,
@@ -97,6 +98,7 @@ module multiplayer_link
     output reg peer_paused = 1'b0,
     output reg peer_frozen = 1'b0,
     output reg peer_in_game = 1'b0,
+    output reg [1:0]peer_hand = 2'd0,
     output link_up,
     output game_paused,
 
@@ -368,8 +370,7 @@ module multiplayer_link
                     send_type    <= TYPE_STATE;
                     send_seq     <= 8'd0;
                     send_len     <= 8'd11;
-                    send_payload <= {6'd0, my_mode,
-                                     uptime_s[15:8], uptime_s[7:0],
+                    send_payload <= {4'd0, my_hand, my_mode, uptime_s[15:8], uptime_s[7:0],
                                      master_decided, is_master, nonce_set, nonce,
                                      in_game, my_paused, my_frozen, 1'b0, my_confirmed, fresh_boot, role_field,
                                      my_health, my_dir, my_y[15:8], my_y[7:0], my_x[15:8], my_x[7:0]};
@@ -437,6 +438,7 @@ module multiplayer_link
                         peer_decided    <= rx_payload[63];
                         peer_uptime     <= {rx_payload[79:72], rx_payload[71:64]};
                         peer_mode       <= rx_payload[81:80];
+                        peer_hand       <= rx_payload[83:82];
                         have_peer_state <= 1'b1;
                         if (rx_payload[50] && !peer_fresh)
                             have_rx_seq <= 1'b0;     // the other board rebooted
