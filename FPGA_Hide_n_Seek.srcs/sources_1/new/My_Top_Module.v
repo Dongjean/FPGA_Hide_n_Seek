@@ -731,10 +731,11 @@ module My_Top_Module (
         .in_hud       ()
     );
  
-//    assign pixel_data2 = in_minimap ? minimap_pixel : hud_pixel;
- 
-    assign pixel_data2 = (screen_white && !game_paused) ? 16'hFFFF : (in_minimap ? minimap_pixel : hud_pixel);
- 
+    // Display black on the 2nd Oled if we are not in game
+    assign pixel_data2 = (game_state == STATE_PLAYING) ? (
+        (screen_white && !game_paused) ? 16'hFFFF : (in_minimap ? minimap_pixel : hud_pixel)
+    ) : 16'd0;
+    
 //    // Enemy Player Movement Module
 //    player_movement #(
 //        .DIR_NORTH (DIR_NORTH),
