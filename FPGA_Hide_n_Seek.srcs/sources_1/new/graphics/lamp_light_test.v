@@ -1,6 +1,5 @@
 `timescale 1ns / 1ps
-// Is a world position within 1.5 cells of a ceiling lamp
-// The six squares are done in DSP blocks (lamp_square) to save LUTs
+// Within 1.5 cells of a ceiling lamp
 module lamp_light_test (
     input  [99:0]        light_bits,   // bit [99 - y*10 - x]
     input  signed [15:0] x,            // Q8.8
@@ -9,7 +8,7 @@ module lamp_light_test (
     output               lamp_here     // lamp in this position's cell
 );
 
-    // Cells off the 10x10 map have no lamp
+    // off-map = no lamp
     function lamp_at (input [99:0] bits, input signed [8:0] cx, input signed [8:0] cy);
         reg [3:0] ux;
         reg [3:0] uy;
@@ -30,7 +29,7 @@ module lamp_light_test (
     wire [7:0] frac_x = x[7:0];
     wire [7:0] frac_y = y[7:0];
 
-    // Distance to the centre of the cell to the left / this one / to the right
+    // distance to cell centres, left / this / right
     wire [8:0] dist_x_m1 = 9'd128 + {1'b0, frac_x};
     wire [8:0] dist_x_0  = (frac_x >= 8'd128) ? ({1'b0, frac_x} - 9'd128) : (9'd128 - {1'b0, frac_x});
     wire [8:0] dist_x_p1 = 9'd384 - {1'b0, frac_x};
@@ -38,7 +37,7 @@ module lamp_light_test (
     wire [8:0] dist_y_0  = (frac_y >= 8'd128) ? ({1'b0, frac_y} - 9'd128) : (9'd128 - {1'b0, frac_y});
     wire [8:0] dist_y_p1 = 9'd384 - {1'b0, frac_y};
 
-    // Halved so the squares fit 16 bits
+    // halved to fit 16 bits
     wire [7:0]  half_x_m1 = dist_x_m1[8:1];
     wire [7:0]  half_x_0  = dist_x_0[8:1];
     wire [7:0]  half_x_p1 = dist_x_p1[8:1];
@@ -55,7 +54,7 @@ module lamp_light_test (
 
     localparam [16:0] RADIUS_SQUARED = 17'd36864;     // (384 / 2)^2
 
-    // The 3x3 cells around the position
+    // 3x3 cells around
     wire [8:0] near;
     genvar i, j;
     generate
@@ -76,7 +75,7 @@ module lamp_light_test (
 endmodule
 
 
-// 8-bit square in a DSP block
+// square in a DSP block
 (* use_dsp = "yes" *)
 module lamp_square (
     input  [7:0]  a,

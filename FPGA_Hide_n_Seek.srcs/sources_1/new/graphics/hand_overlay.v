@@ -1,10 +1,7 @@
 `timescale 1ns / 1ps
-// First-person held item drawn over the 3D view, always the one sw0 picks
-// Hunter: shotgun (gun) or hider detector (item).  Hider: freeze blast (gun) or flashbang (item)
-// Shotgun shot: muzzle flash overlay for 1/10 s
-// Other counted shot or use: the overlay's own pixels turn white for 1/8 s
-// Press with nothing left: the overlay is tinted red, on/off twice
-// Frozen: ice-blue border around the screen
+// Held item overlay, picked by sw0
+// Hunter: shotgun / detector, Hider: freeze blast / flashbang
+// Also: shot flash, red tint on empty press, ice border when frozen
 module hand_overlay #(
     parameter integer CLK_HZ = 6_250_000
 )(
@@ -15,7 +12,7 @@ module hand_overlay #(
     input         item_sel,      // weapon_sel[0]: 0 gun, 1 item
     input         has_ammo,
     input         has_use,
-    input         try_fire,      // 1-cycle: fire pressed while I can act
+    input         try_fire,      // 1-cycle pulse
     input         fired_gun,     // 1-cycle
     input         used_item,     // 1-cycle
     input         frozen,
@@ -23,8 +20,7 @@ module hand_overlay #(
     output [15:0] colour
 );
 
-    // Overlays: 1 flashbang, 2 freeze blast, 3 shotgun, 4 hider detector, 5 muzzle flash
-    // Stored as the 48x38 bottom-right window (x 48..95, y 26..63) of the 96x64 screen
+    // 1 flashbang, 2 freeze, 3 shotgun, 4 detector, 5 muzzle, 48x38 window at x48 y26
     localparam [2:0] O_NONE = 3'd0, O_FLASH = 3'd1, O_FREEZE = 3'd2,
                      O_GUN = 3'd3, O_DETECT = 3'd4, O_MUZZLE = 3'd5;
     localparam [19:0] WHITE_CLKS  = CLK_HZ / 8;
@@ -37,7 +33,7 @@ module hand_overlay #(
     wire empty_try = try_fire && (item_sel ? !has_use : !has_ammo);
     wire gun_shot  = fired_gun && !is_hider;
 
-    // Use flash: muzzle flash for a shotgun shot, white for anything else
+    // use flash: muzzle for shotgun, white otherwise
     reg [19:0] use_count = 20'd0;
     reg        use_muzzle = 1'b0;
     always @(posedge clk) begin
@@ -51,7 +47,7 @@ module hand_overlay #(
         end
     end
 
-    // Red tint: 4 phases (on, off, on, off)
+    // red tint, on/off twice
     reg [19:0] blink_count = 20'd0;
     reg [2:0]  blink_phase = 3'd0;      // phases left
     always @(posedge clk) begin
@@ -99,7 +95,7 @@ module hand_overlay #(
     always @(posedge clk)
         texel <= overlay_texel[addr];
 
-    // Ice border: solid outer ring, dotted ring inside it
+    // ice border
     wire edge0 = (pixel_x == 7'd0) || (pixel_x == 7'd95) || (pixel_y == 6'd0) || (pixel_y == 6'd63);
     wire edge1 = (((pixel_x == 7'd1) || (pixel_x == 7'd94)) && (pixel_y >= 6'd1) && (pixel_y <= 6'd62)) ||
                  (((pixel_y == 6'd1) || (pixel_y == 6'd62)) && (pixel_x >= 7'd1) && (pixel_x <= 7'd94));

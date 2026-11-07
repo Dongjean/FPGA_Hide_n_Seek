@@ -68,7 +68,7 @@ module game_timer #(
     wire at_one_cs = (min_digit == 4'd0) && (sec_tens == 3'd0) && (sec_ones == 4'd0) &&
                      (cs_tens == 4'd0) && (cs_ones == 4'd1);
 
-    // Countdown, digits borrow like a clock
+    // countdown
     always @(posedge clk) begin
         if (reset || start) begin
             min_digit <= ROUND_MINUTES;
@@ -79,7 +79,6 @@ module game_timer #(
             time_up   <= 1'b0;
         end else if (!time_up) begin
             if (penalty) begin
-                // The penalty is PEN_TENS on the tens digit
                 if (min_digit == 4'd0 &&
                     (sec_tens < PEN_TENS || (sec_tens == PEN_TENS && sec_ones == 4'd0 && cs_tens == 4'd0 && cs_ones == 4'd0))) begin
                     sec_tens <= 3'd0; sec_ones <= 4'd0; cs_tens <= 4'd0; cs_ones <= 4'd0;
@@ -119,7 +118,7 @@ module game_timer #(
         end
     end
 
-    // Whole seconds left, plus one while a fraction remains
+    // seconds left, rounded up
     wire [8:0] min_x60 = ({5'b00000, min_digit} << 6) - ({5'b00000, min_digit} << 2);
     wire [8:0] sec_x10 = ({6'b000000, sec_tens} << 3) + ({6'b000000, sec_tens} << 1);
     wire       frac    = (cs_tens != 4'd0) || (cs_ones != 4'd0);
@@ -129,7 +128,7 @@ module game_timer #(
     always @(posedge clk) time_up_d <= time_up;
     assign time_up_pulse = time_up && !time_up_d;
 
-    // 7-seg: M.SS above a minute, SS.cc below, an[3] is the leftmost digit
+    // 7-seg: M.SS, SS.cc under a minute
     wire final_ten  = (min_digit == 4'd0) && (sec_tens == 3'd0) && !time_up;
     assign flash_off = final_ten && !blink_on;
     wire minute_mode = (min_digit != 4'd0);
