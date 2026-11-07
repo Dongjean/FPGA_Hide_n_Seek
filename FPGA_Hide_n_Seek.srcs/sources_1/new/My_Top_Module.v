@@ -305,9 +305,8 @@ module My_Top_Module (
     assign an  = show_timer ? t_an  : mp_an;
  
     // ---- Ammo / item uses per role, no recharge ----
-    // Seeker: pistol 10, Pinger 5.  Hider: Freeze Gun 5, Flashbang 5.
-    // Shown on the HUD.  Jian Bin's multiplayer_core does not check has_ammo /
-    // has_use yet, so shots and items still work at 0 until it does.
+    // Seeker: pistol 10, Pinger 5.  Hider: Freeze Gun 5, Flashbang 5
+    // Shown on the HUD
     item_counters items (
         .clk          (oled_clk),
         .reset        (reset_game),
@@ -436,7 +435,6 @@ module My_Top_Module (
     // Fire while the crosshair is on the enemy sprite -> enemy_playerstate:
     // Seeker pistol -> 3 damaged | Hider Freeze Gun -> 1 stunned | Hider Flashbang -> 2 blinded
     // enemy_hit_valid / enemy_hit_state are the pulse + state for the link to send later
-    // NOTE: not connected to the other board yet.
 
     // Crowd control dealt to the enemy
     wire [1:0]  enemy_playerstate;          // 0 normal, 1 stunned, 2 blinded, 3 damaged
