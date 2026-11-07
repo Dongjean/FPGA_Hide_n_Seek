@@ -1,6 +1,4 @@
 `timescale 1ns / 1ps
-// PROPOSED edit of Dongjin's player_movement.v (adds load_pos/load_x/load_y/load_dir and bump/bump_cx/bump_cy).
-// Not a replacement until Dongjin approves; the same change is in player_movement_edits.diff.
 
 module player_movement
 #(
