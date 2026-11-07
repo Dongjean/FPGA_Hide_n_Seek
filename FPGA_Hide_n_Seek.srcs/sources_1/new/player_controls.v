@@ -1,21 +1,7 @@
 `timescale 1ns / 1ps
-// All player controls in one place: Basys3 buttons and switches (board_controls)
-// plus a USB mouse OR keyboard on the Basys3 USB port (usb_mouse_keyboard).
-// Every control works from any input device, so the rest of the game only sees
-// these outputs.
-//
-//                 Buttons/switches   Mouse                Keyboard
-//   walk          btnU / btnD        -                    W / S or Up / Down
-//   turn          btnL / btnR        move left / right    A / D or Left / Right
-//   shoot         btnC press         left click           Space
-//   weapon        sw[1:0]            right click (swap)   1 / 2
-//   pause/resume  flip sw[15]        -                    Esc or P
-//   confirm       -                  middle click         Enter
-//
-// Mouse turning: horizontal movement is added up, and each frame where at least
-// MOUSE_STEP counts have built up turns the player one step (the same turn speed
-// as holding a button). A fast flick is spread over the next few frames.
 
+//Player controls
+//Combines the board buttons/switches with a USB mouse or keyboard into one set of controls.
 module player_controls
 #(
     parameter integer CLK_HZ        = 6_250_000,
@@ -24,7 +10,7 @@ module player_controls
 )
 (
     input clk,
-    input frame_tick,              // frame_begin from the OLED driver
+    input frame_tick,
     input btnU,
     input btnD,
     input btnL,
@@ -47,9 +33,10 @@ module player_controls
     output reset_game,
     output mouse_present,
     output keyboard_present,
-    output [15:0]ps2_debug        // {detection state, bytes received mod 16, last byte}
+    output [15:0]ps2_debug
 );
-    // ---------------- Buttons and switches ----------------
+
+    //Buttons and switches
     wire btn_forward, btn_backward, btn_left, btn_right, btn_shoot;
     wire [1:0]sw_weapon;
     wire sw_weapon_changed, sw_paused, sw_pause_changed;
@@ -76,7 +63,7 @@ module player_controls
         .reset_game     (reset_game)
     );
 
-    // ---------------- Mouse or keyboard ----------------
+    //USB mouse or keyboard
     wire mouse_event, mouse_left, mouse_right, mouse_middle;
     wire signed [8:0]mouse_dx;
     wire key_up, key_down, key_left, key_right, key_fire;
@@ -107,9 +94,10 @@ module player_controls
         .debug            (ps2_debug)
     );
 
-    // ---------------- Mouse turning ----------------
+    //Mouse turning
+    //Mouse movement is stored and turned into at most one turn step per frame.
     localparam signed [15:0]STEP    = MOUSE_STEP;
-    localparam signed [15:0]BACKLOG = 4 * MOUSE_STEP;   // at most 4 frames of turning stored
+    localparam signed [15:0]BACKLOG = 4 * MOUSE_STEP;
 
     reg signed [15:0]turn_amount = 16'sd0;
     reg mouse_turn_left = 1'b0;
@@ -144,14 +132,14 @@ module player_controls
             turn_amount <= next_amount;
     end
 
+    //Movement from any device
     assign move_forward  = btn_forward  || key_up;
     assign move_backward = btn_backward || key_down;
     assign turn_left     = btn_left     || key_left  || mouse_turn_left;
     assign turn_right    = btn_right    || key_right || mouse_turn_right;
 
-    // ---------------- Shoot, weapon, pause, confirm ----------------
-    // For 50 ms after a reset the switch debouncers are still settling, so switch
-    // changes are ignored (otherwise sw[15] up at power-on would toggle pause).
+    //Shoot, weapon and pause
+    //Switch changes are ignored for 50 ms after reset while the debouncers settle.
     localparam integer SETTLE_CLKS = CLK_HZ / 20;
     reg [31:0]settle_count = 32'd0;
     wire settled = (settle_count == SETTLE_CLKS);
@@ -181,7 +169,6 @@ module player_controls
             weapon_sel <= sw_weapon;
             paused     <= 1'b0;
         end else begin
-            // Whichever device changed the weapon last wins
             if (sw_weapon_changed) begin
                 weapon_sel     <= sw_weapon;
                 weapon_changed <= 1'b1;
@@ -196,7 +183,6 @@ module player_controls
                 weapon_changed <= 1'b1;
             end
 
-            // Flipping sw[15] either way, or Esc/P, toggles pause
             if (sw_pause_changed || key_pause) begin
                 paused        <= ~paused;
                 pause_changed <= 1'b1;

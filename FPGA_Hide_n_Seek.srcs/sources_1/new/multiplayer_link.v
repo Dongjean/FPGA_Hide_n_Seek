@@ -45,6 +45,8 @@
 // Packets:  STATE 0x10 (11 bytes; byte 10 = {4'b0, hand, mode}), EVENT 0x20 (4 bytes: code, arg low, arg high, arg2),
 //           ACK 0x21 (1 byte: sequence number being acknowledged)
 
+//Multiplayer link
+//Board-to-board messages: master election, match start, player state every 20 ms, reliable events.
 module multiplayer_link
 #(
     parameter integer CLK_HZ     = 6_250_000,
@@ -60,29 +62,26 @@ module multiplayer_link
     input link_rx,
     output link_tx,
 
-    // Main menu
-    input [1:0]my_mode,                    // 0 = choosing, 1 = singleplayer, 2 = multiplayer
-    output reg [1:0]peer_mode = 2'd0,      // the other board's my_mode (0 while the link is down)
-    input [1:0]my_pick,                    // role this player has picked: 1 = Hider, 2 = Seeker
-    input my_confirmed,                    // this player has confirmed my_pick
-    output reg [1:0]peer_pick = 2'd0,      // role the other player has picked
-    output reg peer_confirmed = 1'b0,      // the other player has confirmed peer_pick
+    input [1:0]my_mode,
+    output reg [1:0]peer_mode = 2'd0,
+    input [1:0]my_pick,
+    input my_confirmed,
+    output reg [1:0]peer_pick = 2'd0,
+    output reg peer_confirmed = 1'b0,
     output reg is_master = 1'b0,
-    output reg master_decided = 1'b0,      // is_master is valid
-    output reg [1:0]my_role = 2'd0,        // this player's role in the match (set at START)
+    output reg master_decided = 1'b0,
+    output reg [1:0]my_role = 2'd0,
     output reg in_game = 1'b0,
-    output reg start_game = 1'b0,          // one pulse on both boards
-    output reg [15:0]game_seed = 16'd1,    // never 0, so it is safe for an LFSR
+    output reg start_game = 1'b0,
+    output reg [15:0]game_seed = 16'd1,
 
-    // End of match
-    input ev_game_over,                    // this board decided the match is over
-    input [1:0]winner_in,                  // 1 = Hider won, 2 = Seeker won
-    input ev_menu,                         // back to the main menu from the end screen
-    output reg game_over = 1'b0,           // the end screen is showing
+    input ev_game_over,
+    input [1:0]winner_in,
+    input ev_menu,
+    output reg game_over = 1'b0,
     output reg [1:0]winner = 2'd0,
 
-    // This board's player
-    input signed [15:0]my_x,               // Q8.8 map cells
+    input signed [15:0]my_x,
     input signed [15:0]my_y,
     input [7:0]my_dir,
     input [7:0]my_health,
@@ -90,7 +89,6 @@ module multiplayer_link
     input my_frozen,  
     input [1:0]my_hand,                    // held item: 0 empty, 1 gun, 2 item
 
-    // The other board's player
     output reg signed [15:0]peer_x = 16'sd0,
     output reg signed [15:0]peer_y = 16'sd0,
     output reg [7:0]peer_dir = 8'd0,
@@ -102,19 +100,17 @@ module multiplayer_link
     output link_up,
     output game_paused,
 
-    // Events caused by this board (one clock pulses)
-    input ev_hit,                          // this player's shot hit the other player
+    input ev_hit,
     input [7:0]hit_damage,
-    input ev_freeze,                       // Hider's Freeze Gun hit the Seeker
-    input ev_ping,                         // Seeker used the Radio Pinger
-    input ev_flash,                        // Hider threw a Flashbang
-    input ev_capsule,                      // Hider took a Time Capsule
+    input ev_freeze,
+    input ev_ping,
+    input ev_flash,
+    input ev_capsule,
     input [7:0]capsule_id,
     input ev_restart,
-    input state_change_valid,              // put the other player's FSM into player_state
+    input state_change_valid,
     input [1:0]player_state,
 
-    // Events caused by the other board (one clock pulses)
     output reg got_hit = 1'b0,
     output reg [7:0]got_hit_damage = 8'd0,
     output reg got_frozen = 1'b0,
@@ -122,18 +118,19 @@ module multiplayer_link
     output reg peer_flash_used = 1'b0,
     output reg peer_capsule = 1'b0,
     output reg [7:0]peer_capsule_id = 8'd0,
-    output reg restart_game = 1'b0,        // pulses on both boards for a restart from either
-    output reg got_state_change = 1'b0,    // the other board asks my FSM to enter got_player_state
+    output reg restart_game = 1'b0,
+    output reg got_state_change = 1'b0,
     output reg [1:0]got_player_state = 2'd0,
 
-    // Radio Pinger reveal on the Seeker's board
     output reveal_active,
     output signed [15:0]reveal_x,
     output signed [15:0]reveal_y,
 
-    output reg [7:0]rx_error_count = 8'd0, // rejected packets, for debugging
-    output reg ev_overflow = 1'b0          // stays high if an event was ever dropped
+    output reg [7:0]rx_error_count = 8'd0,
+    output reg ev_overflow = 1'b0
 );
+
+    //Roles, packet types and event codes
     localparam [1:0]ROLE_HIDER  = 2'd1;
     localparam [1:0]ROLE_SEEKER = 2'd2;
 
@@ -151,9 +148,10 @@ module multiplayer_link
     localparam [7:0]EV_GAME_OVER = 8'd8;
     localparam [7:0]EV_MENU      = 8'd9;
     localparam [7:0]EV_PSTATE    = 8'd10;
- 
+
     localparam [1:0]MODE_MULTI  = 2'd2;
 
+    //Sizes and timing
     localparam integer MAX_LEN     = 11;
     localparam integer CLKS_PER_MS = CLK_HZ / 1000;
     localparam integer RETRY_CLKS  = RETRY_MS * CLKS_PER_MS;
@@ -163,7 +161,7 @@ module multiplayer_link
         other_role = (r == ROLE_HIDER) ? ROLE_SEEKER : ROLE_HIDER;
     endfunction
 
-    // ---------------- Packet layer ----------------
+    //Packet sender
     reg send = 1'b0;
     reg [7:0]send_type;
     reg [7:0]send_seq;
@@ -183,6 +181,7 @@ module multiplayer_link
         .tx          (link_tx)
     );
 
+    //Packet receiver
     wire rx_valid;
     wire rx_error;
     wire [7:0]rx_type;
@@ -202,6 +201,7 @@ module multiplayer_link
         .pkt_error   (rx_error)
     );
 
+    //Link monitor
     wire heartbeat;
     link_monitor #(.CLK_HZ(CLK_HZ), .HEARTBEAT_MS(STATE_MS), .TIMEOUT_MS(TIMEOUT_MS)) status (
         .clk          (clk),
@@ -211,7 +211,8 @@ module multiplayer_link
         .heartbeat    (heartbeat)
     );
 
-    // ---------------- Outgoing event queue (8 entries of {code, arg, arg2}) ----------------
+    //Event queue
+    //Up to 8 events waiting to be sent; each is resent until the other board ACKs it.
     reg [31:0]queue [0:7];
     reg [2:0]q_head = 3'd0;
     reg [2:0]q_tail = 3'd0;
@@ -220,7 +221,6 @@ module multiplayer_link
     wire [15:0]head_arg = queue[q_head][23:8];
     wire [7:0]head_arg2 = queue[q_head][7:0];
 
-    // Event requests waiting to enter the queue, so simultaneous pulses are not lost
     reg p_start = 1'b0, p_hit = 1'b0, p_freeze = 1'b0, p_ping = 1'b0;
     reg p_flash = 1'b0, p_capsule = 1'b0, p_restart = 1'b0;
     reg p_over = 1'b0, p_menu = 1'b0, p_pstate = 1'b0;
@@ -231,41 +231,40 @@ module multiplayer_link
     reg [1:0]arg_over;
     reg [1:0]arg_pstate;
 
-    reg waiting_ack = 1'b0;       // head of the queue has been sent, waiting for its ACK
-    reg ev_send_req = 1'b0;       // head of the queue needs to be (re)sent
+    reg waiting_ack = 1'b0;
+    reg ev_send_req = 1'b0;
     reg [7:0]ev_seq = 8'd0;
     reg [31:0]retry_count = 32'd0;
 
+    //Received events, reboot detection and match start
     reg ack_pending = 1'b0;
     reg [7:0]ack_seq = 8'd0;
     reg have_rx_seq = 1'b0;
     reg [7:0]last_rx_seq = 8'd0;
 
-    // Reboot detection: fresh_boot is set after reset and cleared once one of our
-    // events has been acknowledged. When the other board sees it change from 0 to 1,
-    // it knows we restarted (and our sequence numbers started again from 0).
     reg fresh_boot = 1'b1;
-    reg fresh_announced = 1'b0;   // at least one STATE sent since reset
+    reg fresh_announced = 1'b0;
     reg peer_fresh = 1'b0;
 
     reg state_due = 1'b0;
-    reg start_requested = 1'b0;   // master: START is queued for this menu
-    reg start_next = 1'b0;        // my_role and game_seed are set: start on the next clock
+    reg start_requested = 1'b0;
+    reg start_next = 1'b0;
     reg [15:0]free_count = 16'd0;
     reg [31:0]reveal_count = 32'd0;
 
-    // ---------------- Master / slave election ----------------
+    //Master election registers
     reg [31:0]sec_count = 32'd0;
-    reg [15:0]uptime_s = 16'd0;   // seconds since this board was reset
-    reg [4:0]nonce = 5'd0;        // random number for ties
+    reg [15:0]uptime_s = 16'd0;
+    reg [4:0]nonce = 5'd0;
     reg nonce_set = 1'b0;
-    reg have_peer_state = 1'b0;   // a STATE has arrived since the link came up
+    reg have_peer_state = 1'b0;
     reg peer_decided = 1'b0;
     reg peer_master = 1'b0;
     reg peer_nonce_set = 1'b0;
     reg [4:0]peer_nonce = 5'd0;
     reg [15:0]peer_uptime = 16'd0;
 
+    //Working values
     reg do_push;
     reg do_pop;
     reg [7:0]push_code;
@@ -274,11 +273,13 @@ module multiplayer_link
 
     wire [1:0]role_field = in_game ? my_role : my_pick;
 
+    //Pause and Radio Pinger outputs
     assign game_paused   = in_game && (my_paused || peer_paused || !link_up);
     assign reveal_active = (reveal_count != 32'd0);
     assign reveal_x      = peer_x;
     assign reveal_y      = peer_y;
 
+    //Main link logic
     always @(posedge clk) begin
         send             <= 1'b0;
         start_game       <= 1'b0;
@@ -339,7 +340,7 @@ module multiplayer_link
             if (reveal_count != 32'd0)
                 reveal_count <= reveal_count - 32'd1;
 
-            // Uptime in seconds (stops at 65535, about 18 hours)
+            //Uptime counter (seconds), used to pick the master
             if (sec_count == CLK_HZ - 1) begin
                 sec_count <= 32'd0;
                 if (uptime_s != 16'hFFFF)
@@ -348,7 +349,8 @@ module multiplayer_link
                 sec_count <= sec_count + 32'd1;
             end
 
-            // ---------- Transmit: one packet at a time, ACKs first ----------
+            //Transmit
+            //One packet at a time: ACK first, then the next event, then STATE.
             if (!tx_busy && !send) begin
                 if (ack_pending) begin
                     send         <= 1'b1;
@@ -379,7 +381,7 @@ module multiplayer_link
                 end
             end
 
-            // ---------- Resend the head event if no ACK arrives in time ----------
+            //Resend the event if no ACK arrives in time
             if (waiting_ack && !ev_send_req) begin
                 if (retry_count == RETRY_CLKS - 1) begin
                     retry_count <= 32'd0;
@@ -389,13 +391,12 @@ module multiplayer_link
                 end
             end
 
-            // Start sending the next queued event
             if (!waiting_ack && q_count != 4'd0) begin
                 waiting_ack <= 1'b1;
                 ev_send_req <= 1'b1;
             end
 
-            // ---------- Start the match one clock after my_role and game_seed are set ----------
+            //Start the match one clock after the role and seed are set
             if (start_next) begin
                 start_next <= 1'b0;
                 in_game    <= 1'b1;
@@ -403,11 +404,11 @@ module multiplayer_link
                 game_over  <= 1'b0;
             end
 
-            // ---------- Receive ----------
+            //Receive
+            //STATE updates the other player, ACK removes our event, EVENT is acted on once.
             if (rx_error)
                 rx_error_count <= rx_error_count + 8'd1;
 
-            // A new random number the first time a packet arrives (the moment differs between boards)
             if (rx_valid && !nonce_set) begin
                 nonce     <= free_count[4:0] ^ free_count[9:5];
                 nonce_set <= 1'b1;
@@ -441,7 +442,7 @@ module multiplayer_link
                         peer_hand       <= rx_payload[83:82];
                         have_peer_state <= 1'b1;
                         if (rx_payload[50] && !peer_fresh)
-                            have_rx_seq <= 1'b0;     // the other board rebooted
+                            have_rx_seq <= 1'b0;
                     end
 
                     TYPE_ACK: begin
@@ -451,7 +452,6 @@ module multiplayer_link
                             ev_send_req <= 1'b0;
                             ev_seq      <= ev_seq + 8'd1;
                             fresh_boot  <= 1'b0;
-                            // The master starts when its START is acknowledged
                             if (head_code == EV_START && !in_game && !start_next) begin
                                 my_role    <= head_arg2[1:0];
                                 game_seed  <= head_arg;
@@ -468,7 +468,6 @@ module multiplayer_link
                             last_rx_seq <= rx_seq;
                             case (rx_payload[7:0])
                                 EV_START: begin
-                                    // The slave takes the role the master did not
                                     if (!in_game && !start_next) begin
                                         my_role    <= other_role(rx_payload[25:24]);
                                         game_seed  <= rx_payload[23:8];
@@ -497,7 +496,7 @@ module multiplayer_link
                                         game_over <= 1'b1;
                                         winner    <= rx_payload[25:24];
                                     end else if (game_over && !is_master) begin
-                                        winner    <= rx_payload[25:24];   // the master's verdict wins
+                                        winner    <= rx_payload[25:24];
                                     end
                                 end
                                 EV_MENU: begin
@@ -519,14 +518,15 @@ module multiplayer_link
                 endcase
             end
 
-            // ---------- Agree who is master ----------
+            //Master election
+            //The board switched on longer is master; a random number breaks ties.
             if (link_up && have_peer_state) begin
                 if (!master_decided) begin
                     if (peer_decided) begin
-                        is_master      <= !peer_master;           // join a board that has decided
+                        is_master      <= !peer_master;
                         master_decided <= 1'b1;
                     end else if ({1'b0, uptime_s} > {1'b0, peer_uptime} + 17'd1) begin
-                        is_master      <= 1'b1;                   // I was switched on first
+                        is_master      <= 1'b1;
                         master_decided <= 1'b1;
                     end else if ({1'b0, peer_uptime} > {1'b0, uptime_s} + 17'd1) begin
                         is_master      <= 1'b0;
@@ -536,11 +536,10 @@ module multiplayer_link
                             is_master      <= (nonce > peer_nonce);
                             master_decided <= 1'b1;
                         end else begin
-                            nonce_set <= 1'b0;                    // same number: pick again
+                            nonce_set <= 1'b0;
                         end
                     end
                 end else if (peer_decided && peer_master == is_master && nonce_set && peer_nonce_set) begin
-                    // Both claim the same job: the nonce settles it
                     if (nonce != peer_nonce)
                         is_master <= (nonce > peer_nonce);
                     else
@@ -548,7 +547,7 @@ module multiplayer_link
                 end
             end
 
-            // ---------- Move one waiting request into the queue ----------
+            //Move one waiting request into the queue
             if (q_count != 4'd8) begin
                 push_arg2 = 8'd0;
                 if (p_restart) begin
@@ -585,9 +584,7 @@ module multiplayer_link
                 q_head <= q_head + 3'd1;
             q_count <= q_count + {3'd0, do_push} - {3'd0, do_pop};
 
-            // ---------- New requests from the game (after the queue step, so
-            //            a request arriving this clock is never lost) ----------
-            // A request that finds the same kind still waiting (queue full) is lost
+            //New requests from the game
             if ((ev_hit && p_hit && !(do_push && push_code == EV_HIT)) ||
                 (ev_capsule && p_capsule && !(do_push && push_code == EV_CAPSULE)))
                 ev_overflow <= 1'b1;
@@ -616,9 +613,8 @@ module multiplayer_link
                 start_requested <= 1'b0;
             end
 
-            // Multiplayer: the master starts the match as soon as either player has
-            // confirmed a role. The confirmed player keeps their pick (the master's
-            // pick wins a tie); the slave takes whichever role the master did not.
+            //Match start (master only)
+            //When either player confirms a role, the master sends START with the seed.
             if (!in_game && !game_over && !start_next && !start_requested && link_up &&
                 master_decided && is_master &&
                 my_mode == MODE_MULTI && peer_mode == MODE_MULTI &&
@@ -629,6 +625,7 @@ module multiplayer_link
                 start_requested <= 1'b1;
             end
 
+            //STATE timer
             if (heartbeat)
                 state_due <= 1'b1;
         end

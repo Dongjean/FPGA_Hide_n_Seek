@@ -1,17 +1,7 @@
 `timescale 1ns / 1ps
-// Receives packets sent by packet_sender:
-//
-//   | 0xA5 | TYPE | SEQ | LEN | PAYLOAD (LEN bytes) | CRC-8 |
-//
-// pkt_valid pulses for one clock when a packet arrives with a correct CRC.
-// The pkt_* outputs then hold that packet until the next good one arrives,
-// so a corrupted packet never overwrites good data.
-//
-// pkt_error pulses when a packet is thrown away: wrong CRC, a length that is
-// too long, a UART framing error, or the bytes stopping halfway through a packet
-// (for example the cable being unplugged). The receiver then hunts for the next
-// 0xA5 sync byte, so it recovers on its own.
 
+//Packet receiver
+//Rebuilds packets from UART bytes; only packets with a correct CRC are published.
 module packet_receiver
 #(
     parameter integer CLK_HZ  = 100_000_000,
@@ -30,11 +20,12 @@ module packet_receiver
     output reg [8*MAX_LEN-1:0]pkt_payload = 0,
     output reg pkt_error = 1'b0
 );
+
+    //Constants and states
     `include "crc8_checksum.vh"
 
     localparam [7:0]SYNC_BYTE = 8'hA5;
 
-    // A gap of more than 4 byte times (40 bits) inside a packet means it was cut off
     localparam integer CLKS_PER_BIT  = (CLK_HZ + BAUD / 2) / BAUD;
     localparam integer GAP_TIMEOUT   = 40 * CLKS_PER_BIT;
 
@@ -45,6 +36,7 @@ module packet_receiver
     localparam [2:0]S_DATA = 3'd4;
     localparam [2:0]S_CRC  = 3'd5;
 
+    //UART
     wire [7:0]rx_byte;
     wire rx_valid;
     wire rx_frame_error;
@@ -58,6 +50,7 @@ module packet_receiver
         .frame_error (rx_frame_error)
     );
 
+    //Packet registers
     reg [2:0]state = S_HUNT;
     reg [7:0]type_r;
     reg [7:0]seq_r;
@@ -67,6 +60,8 @@ module packet_receiver
     reg [7:0]crc;
     reg [23:0]gap_count = 24'd0;
 
+    //Receive FSM
+    //HUNT (sync byte) -> TYPE -> SEQ -> LEN -> DATA -> CRC. A cut-off packet is dropped.
     always @(posedge clk) begin
         pkt_valid <= 1'b0;
         pkt_error <= 1'b0;
@@ -84,7 +79,7 @@ module packet_receiver
                 S_HUNT: begin
                     if (rx_byte == SYNC_BYTE) begin
                         crc       <= 8'd0;
-                        payload_r <= 0;   // unused payload bytes read as zero
+                        payload_r <= 0;
                         state     <= S_TYPE;
                     end
                 end
@@ -137,7 +132,6 @@ module packet_receiver
                 end
             endcase
         end else if (state != S_HUNT) begin
-            // Inside a packet but no byte is arriving: give up after the timeout
             if (gap_count == GAP_TIMEOUT) begin
                 gap_count <= 24'd0;
                 pkt_error <= 1'b1;

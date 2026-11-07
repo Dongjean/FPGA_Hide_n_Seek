@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
-// UART transmitter, 8N1 (1 start bit, 8 data bits LSB first, no parity, 1 stop bit).
-// The line idles high. Pulse start for one clock while busy is low to send data_in.
 
+//UART transmitter
+//Sends one byte as 8N1: start bit, 8 data bits (LSB first), stop bit.
 module uart_transmitter
 #(
     parameter integer CLK_HZ = 100_000_000,
@@ -16,15 +16,19 @@ module uart_transmitter
     output reg tx = 1'b1,
     output busy
 );
+
+    //Timing and registers
     localparam integer CLKS_PER_BIT = (CLK_HZ + BAUD / 2) / BAUD;
 
     reg [15:0]clk_count = 16'd0;
-    reg [3:0]bit_index = 4'd0;   // 0 = start bit, 1 to 8 = data bits, 9 = stop bit
-    reg [9:0]frame;              // {stop, data[7:0], start}, sent from bit 0 upwards
+    reg [3:0]bit_index = 4'd0;
+    reg [9:0]frame;
     reg sending = 1'b0;
 
     assign busy = sending;
 
+    //Send FSM
+    //Idle until start, then shifts out the 10-bit frame, one bit every CLKS_PER_BIT clocks.
     always @(posedge clk) begin
         if (reset) begin
             sending   <= 1'b0;
@@ -38,13 +42,13 @@ module uart_transmitter
                 sending   <= 1'b1;
                 clk_count <= 16'd0;
                 bit_index <= 4'd0;
-                tx        <= 1'b0;   // start bit
+                tx        <= 1'b0;
             end
         end else begin
             if (clk_count == CLKS_PER_BIT - 1) begin
                 clk_count <= 16'd0;
                 if (bit_index == 4'd9) begin
-                    sending <= 1'b0;   // stop bit finished
+                    sending <= 1'b0;
                     tx      <= 1'b1;
                 end else begin
                     bit_index <= bit_index + 4'd1;
