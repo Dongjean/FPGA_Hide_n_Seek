@@ -37,24 +37,18 @@ module hand_overlay #(
     wire empty_try = try_fire && (item_sel ? !has_use : !has_ammo);
     wire gun_shot  = fired_gun && !is_hider;
 
-    // White flash
-    reg [19:0] white_count = 20'd0;
+    // Use flash: muzzle flash for a shotgun shot, white for anything else
+    reg [19:0] use_count = 20'd0;
+    reg        use_muzzle = 1'b0;
     always @(posedge clk) begin
-        if (gun_shot || empty_try)
-            white_count <= 20'd0;
-        else if (fired_gun || used_item)
-            white_count <= WHITE_CLKS;
-        else if (white_count != 20'd0)
-            white_count <= white_count - 20'd1;
-    end
-
-    // Muzzle flash
-    reg [19:0] muzzle_count = 20'd0;
-    always @(posedge clk) begin
-        if (gun_shot)
-            muzzle_count <= MUZZLE_CLKS;
-        else if (muzzle_count != 20'd0)
-            muzzle_count <= muzzle_count - 20'd1;
+        if (empty_try) begin
+            use_count  <= 20'd0;
+        end else if (fired_gun || used_item) begin
+            use_count  <= gun_shot ? MUZZLE_CLKS : WHITE_CLKS;
+            use_muzzle <= gun_shot;
+        end else if (use_count != 20'd0) begin
+            use_count  <= use_count - 20'd1;
+        end
     end
 
     // Red tint: 4 phases (on, off, on, off)
@@ -74,9 +68,9 @@ module hand_overlay #(
         end
     end
 
-    wire white = (white_count != 20'd0) && in_game;
+    wire white = (use_count != 20'd0) && !use_muzzle && in_game;
     wire red   = blink_phase[0] == 1'b0 && blink_phase != 3'd0 && in_game;   // phases 4 and 2
-    wire [2:0] shown = (muzzle_count != 20'd0 && current == O_GUN) ? O_MUZZLE : current;
+    wire [2:0] shown = ((use_count != 20'd0) && use_muzzle && (current == O_GUN)) ? O_MUZZLE : current;
 
     wire [5:0]  pixel_y = pixel_index / 13'd96;
     wire [12:0] y_x96   = ({7'd0, pixel_y} << 6) + ({7'd0, pixel_y} << 5);

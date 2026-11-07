@@ -31,9 +31,13 @@ module game_timer #(
     localparam integer BLINK_CLKS   = (CLK_HZ / 8    < 1) ? 1 : CLK_HZ / 8;
     localparam integer REFRESH_CLKS = (CLK_HZ / 1000 < 1) ? 1 : CLK_HZ / 1000;
 
-    reg [31:0] cs_count = 32'd0;
-    reg [31:0] blink_count = 32'd0;
-    reg [31:0] refresh_count = 32'd0;
+    localparam integer CS_W      = $clog2(CS_CLKS + 1);
+    localparam integer BLINK_W   = $clog2(BLINK_CLKS + 1);
+    localparam integer REFRESH_W = $clog2(REFRESH_CLKS + 1);
+
+    reg [CS_W-1:0]      cs_count = 0;
+    reg [BLINK_W-1:0]   blink_count = 0;
+    reg [REFRESH_W-1:0] refresh_count = 0;
     reg        blink_on = 1'b1;
     reg [1:0]  digit_sel = 2'd0;
 
@@ -41,23 +45,23 @@ module game_timer #(
 
     always @(posedge clk) begin
         if (reset || start) begin
-            cs_count <= 32'd0;
+            cs_count <= 0;
         end else if (run && !time_up) begin
-            cs_count <= cs_tick ? 32'd0 : cs_count + 32'd1;
+            cs_count <= cs_tick ? 0 : cs_count + 1'b1;
         end
 
         if (blink_count == BLINK_CLKS - 1) begin
-            blink_count <= 32'd0;
+            blink_count <= 0;
             blink_on    <= ~blink_on;
         end else begin
-            blink_count <= blink_count + 32'd1;
+            blink_count <= blink_count + 1'b1;
         end
 
         if (refresh_count == REFRESH_CLKS - 1) begin
-            refresh_count <= 32'd0;
+            refresh_count <= 0;
             digit_sel     <= digit_sel + 2'd1;
         end else begin
-            refresh_count <= refresh_count + 32'd1;
+            refresh_count <= refresh_count + 1'b1;
         end
     end
 

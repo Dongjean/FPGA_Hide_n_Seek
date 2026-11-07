@@ -68,11 +68,8 @@ module Raycast_3D_Engine
     reg      wall_ew_b     [0:RAY_COLUMNS-1];
     reg [7:0] wall_dist_a [0:RAY_COLUMNS-1];
     reg [7:0] wall_dist_b [0:RAY_COLUMNS-1];
-    // Isaac: texture and lamp light per column
-    reg [3:0]wall_tex_a    [0:RAY_COLUMNS-1];
-    reg [3:0]wall_tex_b    [0:RAY_COLUMNS-1];
-    reg      wall_lit_a    [0:RAY_COLUMNS-1];
-    reg      wall_lit_b    [0:RAY_COLUMNS-1];
+    // Isaac: texture and lamp light per column, {tex, lit} at {buffer, column} in LUT-RAM
+    reg [4:0]wall_texlit   [0:255];
     reg signed [15:0]pose_x_a;
     reg signed [15:0]pose_y_a;
     reg [7:0]        pose_dir_a;
@@ -110,14 +107,31 @@ module Raycast_3D_Engine
     wire [3:0] hit_tex;
     ornament_lookup hit_ornament (.entries(orn_entries), .face(hit_face), .tex(hit_tex));
 
-    wire hit_lit;
-    lamp_light_test hit_lamp (
+    // One lamp test: the wall hit while a column is stored, otherwise the sprite and the
+    // capsule in turn (their results are held in sprite_lit / cap_lit)
+    wire signed [15:0] cap_x;
+    wire signed [15:0] cap_y;
+    reg                lamp_turn = 1'b0;      // 0 sprite, 1 capsule
+    reg                sprite_lit = 1'b0;
+    reg                cap_lit = 1'b0;
+    wire               lamp_for_hit = (render_state == RC_STORE);
+    wire signed [15:0] lamp_x = lamp_for_hit ? hit_pos_x : (lamp_turn ? cap_x : spr_x);
+    wire signed [15:0] lamp_y = lamp_for_hit ? hit_pos_y : (lamp_turn ? cap_y : spr_y);
+    wire               lamp_lit;
+    lamp_light_test lamp (
         .light_bits (light_bits),
-        .x          (hit_pos_x),
-        .y          (hit_pos_y),
-        .lit        (hit_lit),
+        .x          (lamp_x),
+        .y          (lamp_y),
+        .lit        (lamp_lit),
         .lamp_here  ()
     );
+    always @(posedge clk) begin
+        if (!lamp_for_hit) begin
+            if (lamp_turn) cap_lit    <= lamp_lit;
+            else           sprite_lit <= lamp_lit;
+            lamp_turn <= ~lamp_turn;
+        end
+    end
 
     integer i;
     
@@ -200,10 +214,6 @@ module Raycast_3D_Engine
                 wall_ew_a[i]     <= 1'b0;
                 wall_u_b[i]      <= 4'd0;
                 wall_ew_b[i]     <= 1'b0;
-                wall_tex_a[i]    <= 4'd0;
-                wall_tex_b[i]    <= 4'd0;
-                wall_lit_a[i]    <= 1'b0;
-                wall_lit_b[i]    <= 1'b0;
                 wall_dist_a[i] <= 8'd0;
                 wall_dist_b[i] <= 8'd0;
             end
@@ -264,8 +274,6 @@ module Raycast_3D_Engine
                         wall_u_a[ray_column]      <= hit_u;
                         wall_ew_a[ray_column]     <= hit_ew;
                         wall_dist_a[ray_column]   <= hit_distance[7:0];
-                        wall_tex_a[ray_column]    <= hit_portal ? 4'd6 : hit_tex;
-                        wall_lit_a[ray_column]    <= hit_lit;
                     end else begin
                         wall_top_b[ray_column]    <= 6'd32 - wall_half_height(hit_distance);
                         wall_bottom_b[ray_column] <= 6'd31 + wall_half_height(hit_distance);
@@ -273,8 +281,6 @@ module Raycast_3D_Engine
                         wall_u_b[ray_column]      <= hit_u;
                         wall_ew_b[ray_column]     <= hit_ew;
                         wall_dist_b[ray_column]   <= hit_distance[7:0];
-                        wall_tex_b[ray_column]    <= hit_portal ? 4'd6 : hit_tex;
-                        wall_lit_b[ray_column]    <= hit_lit;
                     end
 
                     if (ray_column == RAY_COLUMNS-1) begin
@@ -305,6 +311,11 @@ module Raycast_3D_Engine
         end
     end
 
+    // Texture and lamp light of each stored column
+    always @(posedge clk)
+        if (render_state == RC_STORE)
+            wall_texlit[{render_target, ray_column}] <= {hit_portal ? 4'd6 : hit_tex, lamp_lit};
+
     // Pixel lookup for the OLED's linear index
     wire [5:0] pixel_y = pixel_index / 13'd96;
     wire [12:0] pixel_y_times_96 = ({7'd0, pixel_y} << 6) +
@@ -320,8 +331,9 @@ module Raycast_3D_Engine
     reg       selected_ew;
     
     reg [7:0] selected_dist;
-    reg [3:0] selected_tex;
-    reg       selected_lit;
+    wire [4:0] shown_texlit = wall_texlit[{front_select, display_column}];
+    wire [3:0] selected_tex = shown_texlit[4:1];
+    wire       selected_lit = shown_texlit[0];
 
     wire [7:0] centre_wall_dist =
         front_select ? wall_dist_b[7'd48] : wall_dist_a[7'd48];
@@ -367,15 +379,6 @@ module Raycast_3D_Engine
         .colour   (floor_ceiling_colour)
     );
 
-    wire        sprite_lit;
-    lamp_light_test sprite_lamp (
-        .light_bits (light_bits),
-        .x          (spr_x),
-        .y          (spr_y),
-        .lit        (sprite_lit),
-        .lamp_here  ()
-    );
-
     wire        sprite_hit;
     wire [7:0]  sprite_dist;
     wire [15:0] sprite_colour;
@@ -407,19 +410,11 @@ module Raycast_3D_Engine
     // Time capsule: one floating sprite on the centre of its cell
     // Capsules come every 40 s and last 20 s, so only one slot is shown (slot 0 first)
     wire       cap_slot = !cap_valid[0];
-    wire signed [15:0] cap_x = {4'b0000, cap_slot ? cap_cells[11:8]  : cap_cells[3:0], 8'h80};
-    wire signed [15:0] cap_y = {4'b0000, cap_slot ? cap_cells[15:12] : cap_cells[7:4], 8'h80};
-    wire        cap_lit;
+    assign cap_x = {4'b0000, cap_slot ? cap_cells[11:8]  : cap_cells[3:0], 8'h80};
+    assign cap_y = {4'b0000, cap_slot ? cap_cells[15:12] : cap_cells[7:4], 8'h80};
     wire        cap_hit;
     wire [15:0] cap_pixel;
     wire [7:0]  cap_near;
-    lamp_light_test cap_lamp (
-        .light_bits (light_bits),
-        .x          (cap_x),
-        .y          (cap_y),
-        .lit        (cap_lit),
-        .lamp_here  ()
-    );
     sprite_billboard #(
         .SINGLE_VIEW (1),
         .ROM_DEPTH   (2304),
@@ -463,8 +458,6 @@ module Raycast_3D_Engine
             selected_u      = wall_u_a[display_column];
             selected_ew     = wall_ew_a[display_column];
             selected_dist   = wall_dist_a[display_column];
-            selected_tex    = wall_tex_a[display_column];
-            selected_lit    = wall_lit_a[display_column];
         end else begin
             selected_top    = wall_top_b[display_column];
             selected_bottom = wall_bottom_b[display_column];
@@ -473,8 +466,6 @@ module Raycast_3D_Engine
             selected_u      = wall_u_b[display_column];
             selected_ew     = wall_ew_b[display_column];
             selected_dist   = wall_dist_b[display_column];
-            selected_tex    = wall_tex_b[display_column];
-            selected_lit    = wall_lit_b[display_column];
         end
 
         if (!selected_valid)

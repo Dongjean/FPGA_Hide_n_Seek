@@ -64,29 +64,6 @@ module ornament_placer (
         end
     endfunction
 
-    // Face already carries an ornament: compare with the placed entries (kind 0 = empty slot)
-    function face_used (input [8:0] f, input [155:0] w);
-        integer k;
-        begin
-            face_used = 1'b0;
-            for (k = 0; k < 12; k = k + 1)
-                if ((w[13 * k + 9 +: 4] != 4'd0) && (w[13 * k +: 9] == f))
-                    face_used = 1'b1;
-        end
-    endfunction
-
-    // Face next to this one along the same wall is already decorated
-    function neighbour_used (input [3:0] x, input [3:0] y, input [1:0] c, input [155:0] w);
-        reg [8:0] idx;
-        begin
-            idx = {times10(y) + {3'b000, x}, c};
-            if (c[1] == 1'b0)       // south / north run along x
-                neighbour_used = ((x != 4'd0) && face_used(idx - 9'd4,  w)) || ((x < 4'd9) && face_used(idx + 9'd4,  w));
-            else                    // west / east run along y
-                neighbour_used = ((y != 4'd0) && face_used(idx - 9'd40, w)) || ((y < 4'd9) && face_used(idx + 9'd40, w));
-        end
-    endfunction
-
     function is_border (input [3:0] x, input [3:0] y);
         is_border = (x == 4'd0) || (x == 4'd9) || (y == 4'd0) || (y == 4'd9);
     endfunction
@@ -104,8 +81,7 @@ module ornament_placer (
     endfunction
 
     reg [2:0]   state;
-    reg [155:0] work;                 // entries being placed, also the faces already used
-    reg [3:0]   ecount;
+    reg [155:0] work;                 // entries being placed, new ones shift in at the bottom
 
     reg [3:0]   cx, cy;
     reg [1:0]   cc;
@@ -122,13 +98,15 @@ module ornament_placer (
     reg [3:0]   ki;
     reg [3:0]   cur_kind;
     reg [7:0]   tries;
+    reg [3:0]   scan;                 // entries compared so far (work rotates one entry per clock)
+    reg         clash;                // candidate face or its neighbour along the wall is used
 
     reg [3:0]   d_off;                // door slide offset
     reg         d_neg;
 
     // Random numbers, stepped only when a draw is used
     wire [15:0] lfsr_out;
-    wire        lfsr_step = ((state == S_CHOOSE) && (got != k_total)) || (state == S_PROBE);
+    wire        lfsr_step = ((state == S_CHOOSE) && (got != k_total)) || ((state == S_PROBE) && (scan == 4'd11));
     lfsr16 rng (.clk(clk), .reset(reset), .load(start), .seed(seed ^ SEED_MIX),
                 .step(lfsr_step), .out(lfsr_out));
 
@@ -140,14 +118,20 @@ module ornament_placer (
     wire [3:0]  cand_y     = cell_row(cand_cell);
     wire [6:0]  cand_x7    = cand_cell - times10(cand_y);
     wire [3:0]  cand_x     = cand_x7[3:0];
-    wire        cand_ok    = cand_valid &&
-                             face_exposed(cand_x, cand_y, cand_code, map_bits) &&
-                             !face_used({cand_cell, cand_code}, work) &&
-                             !portal_bits[cand_cell] &&
-                             ((cur_kind != 4'd3) || is_border(cand_x, cand_y)) &&
-                             !neighbour_used(cand_x, cand_y, cand_code, work);
+    wire [8:0]  cand_face  = {cand_cell, cand_code};
 
-    wire cnt_exposed = face_exposed(cx, cy, cc, map_bits);
+    // Placed entries are compared one per clock as work rotates past slot 0: the face itself,
+    // and the faces either side along the same wall (south / north run along x, west / east along y)
+    // At most 11 entries are placed, so the top slot is always empty when one shifts in
+    wire [155:0] work_rot  = {work[12:0], work[155:13]};
+    wire [12:0] scan_entry = work[12:0];
+    wire [8:0]  scan_face  = scan_entry[8:0];
+    wire        scan_clash = (scan_entry[12:9] != 4'd0) &&
+                             ((scan_face == cand_face) ||
+                              (!cand_code[1] && (cand_x != 4'd0) && (scan_face == cand_face - 9'd4))  ||
+                              (!cand_code[1] && (cand_x <  4'd9) && (scan_face == cand_face + 9'd4))  ||
+                              ( cand_code[1] && (cand_y != 4'd0) && (scan_face == cand_face - 9'd40)) ||
+                              ( cand_code[1] && (cand_y <  4'd9) && (scan_face == cand_face + 9'd40)));
 
     // Door candidate, slides along the border until a face is exposed
     wire [3:0] door_base  = sp_dir[6] ? sp_y : sp_x;
@@ -166,7 +150,16 @@ module ornament_placer (
             default: begin door_x = door_t; door_y = 4'd9;   door_c = 2'd1; end   // facing N, south border
         endcase
     end
-    wire door_ok = door_inrange && face_exposed(door_x, door_y, door_c, map_bits) &&
+    // One exposed-face test, shared by the count, the door and the probe
+    wire [3:0] fe_x = (state == S_COUNT) ? cx : ((state == S_DOOR) ? door_x : cand_x);
+    wire [3:0] fe_y = (state == S_COUNT) ? cy : ((state == S_DOOR) ? door_y : cand_y);
+    wire [1:0] fe_c = (state == S_COUNT) ? cc : ((state == S_DOOR) ? door_c : cand_code);
+    wire       exposed = face_exposed(fe_x, fe_y, fe_c, map_bits);
+
+    wire cand_ok = cand_valid && exposed && !clash && !scan_clash && !portal_bits[cand_cell] &&
+                   ((cur_kind != 4'd3) || is_border(cand_x, cand_y));
+
+    wire door_ok = door_inrange && exposed &&
                    !portal_bits[times10(door_y) + {3'b000, door_x}];
     wire [8:0] door_face = {times10(door_y) + {3'b000, door_x}, door_c};
 
@@ -180,29 +173,29 @@ module ornament_placer (
             busy     <= 1'b0;
             entries  <= 156'd0;
             work     <= 156'd0;
-            ecount   <= 4'd0;
             cx <= 4'd0; cy <= 4'd0; cc <= 2'd0; f_count <= 9'd0;
             sp_x <= 4'd1; sp_y <= 4'd1; sp_dir <= 8'd64;
             k_total <= 4'd0; e_extra <= 3'd0; got <= 4'd0; chosen <= 8'd0;
             w_left <= 3'd0; ki <= 4'd1; cur_kind <= 4'd0; tries <= 8'd0;
+            scan <= 4'd0; clash <= 1'b0;
             d_off <= 4'd0; d_neg <= 1'b0;
         end else if (start) begin
             state    <= S_COUNT;
             busy     <= 1'b1;
             work     <= 156'd0;
-            ecount   <= 4'd0;
             cx <= 4'd0; cy <= 4'd0; cc <= 2'd0; f_count <= 9'd0;
             sp_y     <= cell_row(spawn_cell);
             sp_x     <= spawn_cell[3:0] - times10(cell_row(spawn_cell));
             sp_dir   <= spawn_dir;
             got <= 4'd0; chosen <= 8'd0; w_left <= 3'd0; ki <= 4'd1; tries <= 8'd0;
+            scan <= 4'd0; clash <= 1'b0;
             d_off <= 4'd0; d_neg <= 1'b0;
         end else begin
             case (state)
                 S_IDLE: ;
 
                 S_COUNT: begin
-                    if (cnt_exposed)
+                    if (exposed)
                         f_count <= f_count + 9'd1;
                     if (cc != 2'd3) begin
                         cc <= cc + 2'd1;
@@ -227,7 +220,6 @@ module ornament_placer (
                 S_DOOR: begin
                     if (door_ok) begin
                         work[0 +: 13] <= {4'd2, door_face};
-                        ecount <= 4'd1;
                         state  <= S_CHOOSE;
                     end else if (!d_neg && d_off != 4'd0) begin
                         d_neg <= 1'b1;
@@ -269,14 +261,24 @@ module ornament_placer (
                 end
 
                 S_PROBE: begin
-                    if (cand_ok) begin
-                        work[ecount * 13 +: 13] <= {cur_kind, cand_idx};
-                        ecount                  <= ecount + 4'd1;
-                        state                   <= S_NEXT;
-                    end else if (tries == 8'd255) begin
-                        state <= S_NEXT;                         // gave up on this one
+                    if (scan != 4'd11) begin
+                        clash <= clash | scan_clash;
+                        scan  <= scan + 4'd1;
+                        work  <= work_rot;
                     end else begin
-                        tries <= tries + 8'd1;
+                        // all 12 entries seen (work is back in place): decide on this candidate
+                        clash <= 1'b0;
+                        scan  <= 4'd0;
+                        if (cand_ok) begin
+                            work  <= {work_rot[142:0], cur_kind, cand_idx};
+                            state <= S_NEXT;
+                        end else begin
+                            work  <= work_rot;
+                            if (tries == 8'd255)
+                                state <= S_NEXT;                 // gave up on this one
+                            else
+                                tries <= tries + 8'd1;
+                        end
                     end
                 end
 
