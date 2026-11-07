@@ -636,6 +636,8 @@ module My_Top_Module (
         .btn_right    (turn_right),
         .frame_begin  (frame_begin && can_move && state_can_act), // Only move if the game logic permits you to move
         .map_bits     (map_bits),
+        .opp_x        (op_x),                    // Other board's player, or the bot in solo
+        .opp_y        (op_y),
         .load_pos     (load_pos | tp_load),
         .load_x       (load_pos ? load_x   : tp_x),
         .load_y       (load_pos ? load_y   : tp_y),

@@ -18,6 +18,8 @@ module player_movement
     input btn_right,
     input frame_begin,
     input [99:0]map_bits,
+    input signed [15:0]opp_x,
+    input signed [15:0]opp_y,
 
     // Spawn / teleport load from world_top (later also portal_ctrl)
     input load_pos,                   // 1-cycle: jump to (load_x, load_y) facing load_dir
@@ -39,6 +41,27 @@ module player_movement
     reg [1:0]move_phase;
     reg [15:0]new_x;
     reg [15:0]new_y;
+    
+    // Players may not get closer than 0.25 cell (16'd64) to each other.
+    // A move is refused only if it ends inside that gap AND brings the players closer, so
+    // two players who already overlap (portal landing, link lag) can always walk apart.
+    localparam [15:0] MIN_SEP = 16'd64;
+
+    function opp_blocks (input signed [15:0]nx, input signed [15:0]ny,
+                         input signed [15:0]cx, input signed [15:0]cy,
+                         input signed [15:0]ox, input signed [15:0]oy);
+        reg signed [15:0]ndx, ndy, odx, ody;
+        reg [15:0]nd, od;
+        begin
+            ndx = nx - ox;  if (ndx < 0) ndx = -ndx;
+            ndy = ny - oy;  if (ndy < 0) ndy = -ndy;
+            odx = cx - ox;  if (odx < 0) odx = -odx;
+            ody = cy - oy;  if (ody < 0) ody = -ody;
+            nd = (ndx > ndy) ? ndx : ndy;
+            od = (odx > ody) ? odx : ody;
+            opp_blocks = (nd < MIN_SEP) && (nd < od);
+        end
+    endfunction
     
     function [31:0]move_player (input signed [15:0]x, signed [15:0]y, [7:0]dir);
         begin
@@ -68,24 +91,23 @@ module player_movement
                 move_phase <= 2'd0;
                 if (btn_forward && !btn_backward) begin
                     {new_x, new_y} = move_player(player_x, player_y, view_dir);
-                    if (!map_is_wall(new_x >>> 8, new_y >>> 8, map_bits)) begin
-                        player_x <= new_x;
-                        player_y <= new_y;
-                    end else begin
-                        bump    <= 1'b1;          // tell portal_ctrl which solid cell we walked into
-                        bump_cx <= new_x[11:8];   // = (new_x >>> 8) inside the 10x10 map
-                        bump_cy <= new_y[11:8];
-                    end
-                end else if (btn_backward) begin
-                    // (direction - 128) is behind
-                    {new_x, new_y} = move_player(player_x, player_y, view_dir-128);
-                    if (!map_is_wall(new_x >>> 8, new_y >>> 8, map_bits)) begin
-                        player_x <= new_x;
-                        player_y <= new_y;
-                    end else begin
+                    if (map_is_wall(new_x >>> 8, new_y >>> 8, map_bits)) begin
                         bump    <= 1'b1;
                         bump_cx <= new_x[11:8];
                         bump_cy <= new_y[11:8];
+                    end else if (!opp_blocks(new_x, new_y, player_x, player_y, opp_x, opp_y)) begin
+                        player_x <= new_x;
+                        player_y <= new_y;
+                    end
+                end else if (btn_backward) begin
+                    {new_x, new_y} = move_player(player_x, player_y, view_dir-128);
+                    if (map_is_wall(new_x >>> 8, new_y >>> 8, map_bits)) begin
+                        bump    <= 1'b1;
+                        bump_cx <= new_x[11:8];
+                        bump_cy <= new_y[11:8];
+                    end else if (!opp_blocks(new_x, new_y, player_x, player_y, opp_x, opp_y)) begin
+                        player_x <= new_x;
+                        player_y <= new_y;
                     end
                 end
             end else begin
