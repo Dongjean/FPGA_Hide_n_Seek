@@ -1,4 +1,49 @@
 `timescale 1ns / 1ps
+// Game message layer between the two Basys3 boards, built on packet_sender/packet_receiver.
+//
+// 1. Master and slave: when the link first comes up the two boards agree which one
+//    is the master. The board that has been switched on longer is the master
+//    (uptime is sent in every STATE). If both were switched on within about a
+//    second of each other, a random number (nonce) decides. A board that joins a
+//    board that has already decided takes the other job, and if both ever claim
+//    the same job, the nonce settles it.
+//
+// 2. Main menu: each board sends its game mode (my_mode: 0 = still choosing,
+//    1 = singleplayer, 2 = multiplayer) in every STATE; the other board's mode
+//    appears on peer_mode (0 while the link is down). In multiplayer, as soon as
+//    EITHER player confirms a role (my_pick, my_confirmed / peer_pick,
+//    peer_confirmed) the master picks a random map seed and sends START with its
+//    own role: the confirmed player gets the role they picked and the other
+//    player gets the other one. If both confirm at the same moment the master's
+//    pick wins. Both boards then pulse start_game with the same game_seed and
+//    set my_role for the match.
+//
+// 3. State: every STATE_MS each board sends its player's position, direction,
+//    health and status flags. The other board's copy appears on the peer_* outputs.
+//
+// 4. Events (start, hit, freeze, ping, flashbang, capsule, restart, game over, menu,
+//    player state) must arrive exactly once, so they are sent reliably: each has a
+//    sequence number, the receiver replies with an ACK, the sender resends every
+//    RETRY_MS until it gets the ACK, and the receiver ignores repeats of a sequence
+//    number it has already handled.
+//
+// 5. End of match: ev_game_over (with the winner) ends the match on both boards.
+//    If the boards disagree on the winner, the master's verdict wins. ev_menu
+//    takes both boards from the end screen back to the main menu.
+//
+// 6. Player state: state_change_valid / player_state ask the OTHER board to put
+//    its player_state_FSM into player_state. They arrive there as
+//    got_state_change / got_player_state.
+//
+// 7. Pause: game_paused is high if either player has paused, or if the link is lost
+//    during a game.
+//
+// 8. Radio Pinger: pulsing ev_ping on the Seeker's board raises reveal_active for
+//    REVEAL_MS, while reveal_x/reveal_y give the Hider's live position for the minimap.
+//    The Hider's board gets got_pinged so it can warn the player.
+//
+// Packets:  STATE 0x10 (11 bytes; byte 10 = {4'b0, hand, mode}), EVENT 0x20 (4 bytes: code, arg low, arg high, arg2),
+//           ACK 0x21 (1 byte: sequence number being acknowledged)
 
 //Multiplayer link
 //Board-to-board messages: master election, match start, player state every 20 ms, reliable events.
@@ -41,8 +86,8 @@ module multiplayer_link
     input [7:0]my_dir,
     input [7:0]my_health,
     input my_paused,
-    input my_frozen,
-    input [1:0]my_hand,
+    input my_frozen,  
+    input [1:0]my_hand,                    // held item: 0 empty, 1 gun, 2 item
 
     output reg signed [15:0]peer_x = 16'sd0,
     output reg signed [15:0]peer_y = 16'sd0,

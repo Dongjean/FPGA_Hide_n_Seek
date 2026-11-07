@@ -76,17 +76,18 @@ module multiplayer_core
     output reveal_active,
     output signed [15:0]reveal_x,
     output signed [15:0]reveal_y,
-    output got_pinged,
-    output got_state_change,
-    output [1:0]got_player_state,
+    output got_pinged,                 // I am the Hider and the Seeker just pinged me
+    output got_state_change,           // -> player_state_FSM set_valid
+    output [1:0]got_player_state,      // -> player_state_FSM set_state
 
-    input renderer_hit,
-    output peer_flash_used,
-    input [1:0]my_hand,
+    // Hooks for the rest of the team
+    input renderer_hit,                // with SIMPLE_AIM = 0: crosshair_hit from the renderer
+    output peer_flash_used,            // the other player (Hider) threw a Flashbang
+    input [1:0]my_hand,                // held item: 0 empty, 1 gun, 2 item
     output [1:0]op_hand,
-    input [3:0]capsule_valid,
-    input [31:0]capsule_cells,
-    input ev_capsule,
+    input [3:0]capsule_valid,          // Time Capsules for the bot to look at
+    input [31:0]capsule_cells,         // {y, x} per capsule
+    input ev_capsule,                  // I took Time Capsule capsule_id
     input [7:0]capsule_id,
     output peer_capsule,
     output [7:0]peer_capsule_id,

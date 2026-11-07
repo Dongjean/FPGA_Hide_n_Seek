@@ -241,7 +241,9 @@ module ai_bot
     reg [15:0]move_step;
     reg signed [15:0]diff;
     reg signed [15:0]next_x, next_y;
-
+    
+    // The bot may not get closer than 0.125 cell (16'd32) to the player
+    // Same as player movement
     localparam [15:0] MIN_SEP = 16'd32;
 
     function opp_blocks (input signed [15:0]nx, input signed [15:0]ny,
@@ -514,7 +516,7 @@ module ai_bot
                             if (diff > 0) next_x = (diff > move_step) ? bot_x + move_step : way_x;
                             else          next_x = (-diff > move_step) ? bot_x - move_step : way_x;
                             if (!opp_blocks(next_x, bot_y, bot_x, bot_y, player_x, player_y))
-                                bot_x <= next_x;
+                                bot_x <= next_x;             // else wait for the player to move
                         end else if (bot_y != way_y) begin
                             diff = way_y - bot_y;
                             if (diff > 0) next_y = (diff > move_step) ? bot_y + move_step : way_y;

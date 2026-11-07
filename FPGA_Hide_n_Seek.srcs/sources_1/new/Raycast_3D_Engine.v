@@ -24,6 +24,13 @@ module Raycast_3D_Engine
     input signed [15:0]spr_x,
     input signed [15:0]spr_y,
     input [7:0]spr_facing,
+    input [1:0]spr_hand,         // what the other player holds
+
+    // Ornaments, portals and time capsules (Isaac)
+    input [155:0]orn_entries,
+    input [99:0]portal_bits,     // 1 = portal, bit [y*10 + x], drawn as the mirror
+    input [1:0]cap_valid,
+    input [15:0]cap_cells,       // {y, x} per capsule slot
     
     output crosshair_hit,
     output sprite_visible, // enemy had at least one visible texel in the last rendered frame
@@ -34,6 +41,7 @@ module Raycast_3D_Engine
     `include "trig_LUT.vh"
     `include "ray_helpers.vh"
     `include "wall_helpers.vh"
+    `include "gfx_helpers.vh"
 
     localparam integer SCREEN_WIDTH  = 96;
     localparam integer SCREEN_HEIGHT = 64;
@@ -60,6 +68,8 @@ module Raycast_3D_Engine
     reg      wall_ew_b     [0:RAY_COLUMNS-1];
     reg [7:0] wall_dist_a [0:RAY_COLUMNS-1];
     reg [7:0] wall_dist_b [0:RAY_COLUMNS-1];
+    // Isaac: texture and lamp light per column, {tex, lit} at {buffer, column} in LUT-RAM
+    reg [4:0]wall_texlit   [0:255];
     reg signed [15:0]pose_x_a;
     reg signed [15:0]pose_y_a;
     reg [7:0]        pose_dir_a;
@@ -84,6 +94,44 @@ module Raycast_3D_Engine
     reg [9:0]          hit_distance;
     reg [3:0]          hit_u;     // texture column of the wall hit
     reg                hit_ew;    // 1: east/west facing wall, 0: north/south
+    reg [8:0]          hit_face;  // cell * 4 + {crossed an x boundary, travelling west/south}
+    reg signed [15:0]  hit_pos_x; // where the ray hit, Q8.8
+    reg signed [15:0]  hit_pos_y;
+    reg                hit_portal;
+
+    // Ceiling lamps (Isaac)
+    wire [99:0] light_bits;
+    ceiling_light_map light_map (.map_bits(map_bits), .light_bits(light_bits));
+
+    // Ornament on the face just hit
+    wire [3:0] hit_tex;
+    ornament_lookup hit_ornament (.entries(orn_entries), .face(hit_face), .tex(hit_tex));
+
+    // One lamp test: the wall hit while a column is stored, otherwise the sprite and the
+    // capsule in turn (their results are held in sprite_lit / cap_lit)
+    wire signed [15:0] cap_x;
+    wire signed [15:0] cap_y;
+    reg                lamp_turn = 1'b0;      // 0 sprite, 1 capsule
+    reg                sprite_lit = 1'b0;
+    reg                cap_lit = 1'b0;
+    wire               lamp_for_hit = (render_state == RC_STORE);
+    wire signed [15:0] lamp_x = lamp_for_hit ? hit_pos_x : (lamp_turn ? cap_x : spr_x);
+    wire signed [15:0] lamp_y = lamp_for_hit ? hit_pos_y : (lamp_turn ? cap_y : spr_y);
+    wire               lamp_lit;
+    lamp_light_test lamp (
+        .light_bits (light_bits),
+        .x          (lamp_x),
+        .y          (lamp_y),
+        .lit        (lamp_lit),
+        .lamp_here  ()
+    );
+    always @(posedge clk) begin
+        if (!lamp_for_hit) begin
+            if (lamp_turn) cap_lit    <= lamp_lit;
+            else           sprite_lit <= lamp_lit;
+            lamp_turn <= ~lamp_turn;
+        end
+    end
 
     integer i;
     
@@ -96,6 +144,7 @@ module Raycast_3D_Engine
     reg [3:0] tex_u;
     reg       tex_flip;
     reg [3:0] tex_u_oriented;
+    reg [7:0] hit_cell_idx;      // y * 10 + x of the cell being entered, >= 100 is off the map
 
     // Sequential fixed-point ray marcher
     // Every time it reaches a wall, it stores one projected vertical slice in the buffer that is not displayed
@@ -128,6 +177,8 @@ module Raycast_3D_Engine
             tex_flip = (next_ray_y > ray_y); // travelling south, default north
         end
         tex_u_oriented = tex_flip ? ~tex_u : tex_u;
+        hit_cell_idx = ({4'b0000, next_ray_y[13:10]} << 3) + ({4'b0000, next_ray_y[13:10]} << 1) +
+                       {4'b0000, next_ray_x[13:10]};
 
         if (reset) begin
             render_state  <= RC_IDLE;
@@ -138,6 +189,10 @@ module Raycast_3D_Engine
             hit_distance  <= 10'd0;
             hit_u         <= 4'd0;
             hit_ew        <= 1'b0;
+            hit_face      <= 9'd0;
+            hit_pos_x     <= 16'sd0;
+            hit_pos_y     <= 16'sd0;
+            hit_portal    <= 1'b0;
             pose_x_a      <= 16'sd0;
             pose_y_a      <= 16'sd0;
             pose_dir_a    <= 8'd0;
@@ -198,6 +253,11 @@ module Raycast_3D_Engine
                         hit_distance <= {2'd0, ray_steps} + 10'd1;
                         hit_u        <= tex_u_oriented;
                         hit_ew       <= tex_x_crossed;
+                        hit_face     <= (hit_cell_idx >= 8'd100) ? 9'h1FF         // off the map
+                                                                 : {hit_cell_idx[6:0], tex_x_crossed, tex_flip};
+                        hit_pos_x    <= next_ray_x[17:2];
+                        hit_pos_y    <= next_ray_y[17:2];
+                        hit_portal   <= (hit_cell_idx < 8'd100) && portal_bits[hit_cell_idx[6:0]];
                         render_state <= RC_STORE;
                     end else begin
                         ray_x     <= next_ray_x;
@@ -251,6 +311,11 @@ module Raycast_3D_Engine
         end
     end
 
+    // Texture and lamp light of each stored column
+    always @(posedge clk)
+        if (render_state == RC_STORE)
+            wall_texlit[{render_target, ray_column}] <= {hit_portal ? 4'd6 : hit_tex, lamp_lit};
+
     // Pixel lookup for the OLED's linear index
     wire [5:0] pixel_y = pixel_index / 13'd96;
     wire [12:0] pixel_y_times_96 = ({7'd0, pixel_y} << 6) +
@@ -266,6 +331,9 @@ module Raycast_3D_Engine
     reg       selected_ew;
     
     reg [7:0] selected_dist;
+    wire [4:0] shown_texlit = wall_texlit[{front_select, display_column}];
+    wire [3:0] selected_tex = shown_texlit[4:1];
+    wire       selected_lit = shown_texlit[0];
 
     wire [7:0] centre_wall_dist =
         front_select ? wall_dist_b[7'd48] : wall_dist_a[7'd48];
@@ -289,7 +357,30 @@ module Raycast_3D_Engine
     wire [14:0] tex_scaled = tex_rows * tex_step;
     wire [3:0]  tex_v      = tex_scaled[11:8];
 
+    // Isaac: textured walls, floor and ceiling, lit near lamps
+    wire [15:0] wall_base_colour;
+    wall_texture_rom wall_rom (
+        .clk    (clk),
+        .tex_id (selected_tex),
+        .u      (selected_u),
+        .v      (tex_v),
+        .lit    (selected_lit),
+        .colour (wall_base_colour)
+    );
+
+    wire [15:0] floor_ceiling_colour;
+    floor_ceiling_caster floor_ceiling (
+        .player_x (display_x),
+        .player_y (display_y),
+        .view_dir (display_dir),
+        .pixel_x  (pixel_x),
+        .pixel_y  (pixel_y),
+        .light_bits (light_bits),
+        .colour   (floor_ceiling_colour)
+    );
+
     wire        sprite_hit;
+    wire [7:0]  sprite_dist;
     wire [15:0] sprite_colour;
     sprite_billboard sprite (
         .clk        (clk),
@@ -302,17 +393,61 @@ module Raycast_3D_Engine
         .spr_x      (spr_x),
         .spr_y      (spr_y),
         .spr_facing (spr_facing),
+        .spr_hand   (spr_hand),
         .pixel_x    (pixel_x),
         .pixel_y    (pixel_y),
         .frame_begin(frame_begin),
         .wall_dist  (selected_dist),
-        .lit        (1'b0),
+        .lit        (sprite_lit),
         .centre_wall_dist (centre_wall_dist),
         .hit        (sprite_hit),
         .colour     (sprite_colour),
+        .dist       (sprite_dist),
         .crosshair_hit (crosshair_hit), // Where the crosshair hit logic is output
         .sprite_visible(sprite_visible)
     );
+
+    // Time capsule: one floating sprite on the centre of its cell
+    // Capsules come every 40 s and last 20 s, so only one slot is shown (slot 0 first)
+    wire       cap_slot = !cap_valid[0];
+    assign cap_x = {4'b0000, cap_slot ? cap_cells[11:8]  : cap_cells[3:0], 8'h80};
+    assign cap_y = {4'b0000, cap_slot ? cap_cells[15:12] : cap_cells[7:4], 8'h80};
+    wire        cap_hit;
+    wire [15:0] cap_pixel;
+    wire [7:0]  cap_near;
+    sprite_billboard #(
+        .SINGLE_VIEW (1),
+        .ROM_DEPTH   (2304),
+        .IDX_MEM     ("capsule_idx.mem"),
+        .PAL_MEM     ("capsule_pal.mem"),
+        .PAL_LIT_MEM ("capsule_pal_lit.mem")
+    ) capsule (
+        .clk        (clk),
+        .reset      (reset),
+        .cam_x      (display_x),
+        .cam_y      (display_y),
+        .cam_dir    (display_dir),
+        .spr_enable (|cap_valid),
+        .spr_obj    (2'd0),
+        .spr_x      (cap_x),
+        .spr_y      (cap_y),
+        .spr_facing (8'd0),
+        .spr_hand   (2'd0),
+        .pixel_x    (pixel_x),
+        .pixel_y    (pixel_y),
+        .frame_begin(frame_begin),
+        .wall_dist  (selected_dist),
+        .lit        (cap_lit),
+        .centre_wall_dist (centre_wall_dist),
+        .hit        (cap_hit),
+        .colour     (cap_pixel),
+        .dist       (cap_near),
+        .crosshair_hit (),
+        .sprite_visible()
+    );
+
+    // Nearer sprite in front
+    wire        sprite_front = sprite_hit && (!cap_hit || (sprite_dist <= cap_near));
 
     always @(*) begin
         if (front_select == 1'b0) begin
@@ -335,14 +470,13 @@ module Raycast_3D_Engine
 
         if (!selected_valid)
             pixel_data = 16'h0000;
-        else if (sprite_hit)
-            pixel_data = sprite_colour;
-        else if (pixel_y < selected_top)
-            pixel_data = 16'h0005; // Dark blue ceiling
-        else if (pixel_y > selected_bottom)
-            pixel_data = 16'h2104; // Dark grey floor
+        else if (sprite_hit || cap_hit)
+            pixel_data = sprite_front ? sprite_colour : cap_pixel;
+        else if ((pixel_y < selected_top) || (pixel_y > selected_bottom))
+            pixel_data = floor_ceiling_colour;   // ceiling above the wall, floor below it
         else
-            pixel_data = wall_texture_colour(selected_u, tex_v, selected_shade, selected_ew);
+            pixel_data = shade_rgb565(wall_base_colour,
+                                      selected_ew ? (selected_shade - (selected_shade >> 2)) : selected_shade);
     end
 
 endmodule

@@ -53,14 +53,15 @@ module opponent_select
     input my_paused,
     input my_frozen,
     input [1:0]my_hand,
+    // The other player
     output signed [15:0]peer_x,
     output signed [15:0]peer_y,
     output [7:0]peer_dir,
     output [7:0]peer_health,
     output peer_paused,
     output peer_frozen,
-    output [1:0]peer_hand,
-    output link_up,
+    output [1:0]peer_hand,               // the bot always has its gun ready
+    output link_up,                      // board-to-board link status (multiplayer)
     output game_paused,
 
     input ev_hit,

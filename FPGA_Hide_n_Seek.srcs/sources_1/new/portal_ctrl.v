@@ -4,66 +4,65 @@
 
 module portal_ctrl
 #(
-    parameter integer NUM_PAIRS      = 1,          // number of portal pairs (1 or 2)
-    parameter integer ALLOW_THROUGH  = 1,          // 1 = inner 2 sided portals allowed
-    parameter integer COOLDOWN       = 18_750_000, // 3 s at 6.25 MHz
-    parameter integer MAX_TRIES      = 1023,       // random tries before the ordered scan
-    parameter integer MIN_SPAWN_DIST = 4,          // min distance from exit to each spawn
-    parameter integer MIN_PAIR_DIST  = 4,          // min distance from exit to partner's exit
-    parameter [15:0]  SEED_XOR       = 16'h5A3C    // so it gets different random numbers from map_gen
+    parameter integer NUM_PAIRS      = 1,          
+    parameter integer ALLOW_THROUGH  = 1,          //1 = allow 2 sided portals in the middle of a wall
+    parameter integer COOLDOWN       = 18_750_000, 
+    parameter integer MAX_TRIES      = 1023,       //random tries before we just scan in order
+    parameter integer MIN_SPAWN_DIST = 4,          
+    parameter integer MIN_PAIR_DIST  = 4,         
+    parameter [15:0]  SEED_XOR       = 16'h5A3C    //so the randoms aren't the same as map_gen's
 )
 (
     input                    clk,
     input                    reset,
 
-    // from world_top
-    input                    start,          // 1 cycle pulse: new match (same pulse as world_top.start)
-    input             [15:0] seed,           // same seed as world_top
-    input                    map_done,       // 1 cycle pulse: maze is done (submachine's done)
-    input            [199:0] cells,          // cell type array
-    input             [6:0]  hider_cell,     // spawn cells, y*10 + x
+    //from world_top
+    input                    start,          
+    input             [15:0] seed,           
+    input                    map_done,       
+    input            [199:0] cells,         
+    input             [6:0]  hider_cell,    
     input             [6:0]  seeker_cell,
 
-    // write port into world_top (hold we high until wgrant)
+    //write port to world_top
     output reg               portal_we,
-    output reg        [7:0]  portal_waddr,   // y*10 + x
-    output            [1:0]  portal_wdata,   // always 10 (portal)
+    output reg        [7:0]  portal_waddr,   
+    output            [1:0]  portal_wdata,   
     input                    portal_wgrant,
 
-    // from player_movement
-    input                    bump,           // 1 cycle pulse: walked into something solid
-    input             [3:0]  bump_cx,        // by this cell
+    //from player_movement
+    input                    bump,           
+    input             [3:0]  bump_cx,        //the cell we bumped
     input             [3:0]  bump_cy,
-    input                    game_paused,    // cooldown stops while paused
+    input                    game_paused,    //cooldown freezes when paused
 
-    // teleport: OR'd into player_movement's load_pos (world_top's spawn wins)
-    output reg               tp_load,        // 1 cycle pulse
-    output reg signed [15:0] tp_x,           // Q8.8 cell centre
+    //teleport
+    output reg               tp_load,      
+    output reg signed [15:0] tp_x,           
     output reg signed [15:0] tp_y,
-    output reg        [7:0]  tp_dir,         // 0 N, 64 E, 128 S, 192 W
+    output reg        [7:0]  tp_dir,         
 
-    // status / for capsule_ctrl
-    output reg               portals_ready,  // 1 = portals written, teleports working
-    output reg        [1:0]  pair_valid,     // bit p = pair p (portals 2p, 2p+1) exists
-                                             // (NUM_PAIRS = 1: bit 1 always 0)
-    output            [27:0] portal_cells,   // 4 x 7-bit y*10+x, portal i at [7*i +: 7]
-    output            [27:0] exit_cells      // 4 x 7-bit, exit of portal i (unused slots 0)
+    //status, also for capsule_ctrl
+    output reg               portals_ready,  
+    output reg        [1:0]  pair_valid,     
+    output            [27:0] portal_cells,   
+    output            [27:0] exit_cells     
 );
 
     localparam [1:0] T_FLOOR = 2'b00, T_WALL = 2'b01, T_PORTAL = 2'b10, T_CAPSULE = 2'b11;
     localparam [7:0] DIR_N = 8'd0, DIR_E = 8'd64, DIR_S = 8'd128, DIR_W = 8'd192;
-    localparam [2:0] LAST  = 2*NUM_PAIRS - 1;   // index of the last portal to find
+    localparam [2:0] LAST  = 2*NUM_PAIRS - 1;   //last portal index we need
 
     //states
-    localparam [2:0] S_IDLE   = 3'd0,   // wait for map_done
-                     S_RANDOM = 3'd1,   // random tries from the LFSR
-                     S_SCAN   = 3'd2,   // check all cells in order (backup plan)
-                     S_WRITE  = 3'd3,   // write the portals into world_top
-                     S_READY  = 3'd4;   // teleports working
+    localparam [2:0] S_IDLE   = 3'd0,   //wait for map_done
+                     S_RANDOM = 3'd1,   //try random cells from the lfsr
+                     S_SCAN   = 3'd2,   //backup, go through every cell in order
+                     S_WRITE  = 3'd3,   //write portals into world_top
+                     S_READY  = 3'd4;   //teleports on
 
     assign portal_wdata = T_PORTAL;
 
-    //random numbers
+    //randoms
     wire [15:0] rnd;
     reg         rnd_step;
 
@@ -76,16 +75,16 @@ module portal_ctrl
         .out   (rnd)
     );
 
-    //saved portals (index 0..3)
-    reg [6:0] p_cell [0:3];     // portal cell
-    reg [6:0] e_cell [0:3];     // its exit cell
-    reg [3:0] e_x    [0:3];     // exit x, y (saved so no /10 needed later)
+    //portals we found (0-3)
+    reg [6:0] p_cell [0:3];     //portal cell
+    reg [6:0] e_cell [0:3];     //where it spits you out
+    reg [3:0] e_x    [0:3];     //exit x y, saved so we don't need /10 later
     reg [3:0] e_y    [0:3];
-    reg [7:0] e_dir  [0:3];     // direction from portal to its exit (= facing away)
-    reg [3:0] o_x    [0:3];     // other side = entry side of a through portal
+    reg [7:0] e_dir  [0:3];     //portal -> exit direction, so you face away
+    reg [3:0] o_x    [0:3];     //other side, the entry side for a through portal
     reg [3:0] o_y    [0:3];
     reg [6:0] o_cell [0:3];
-    reg [2:0] n_found;          // portals found so far (0..4)
+    reg [2:0] n_found;          
 
     assign portal_cells = {p_cell[3], p_cell[2], p_cell[1], p_cell[0]};
     assign exit_cells   = {e_cell[3], e_cell[2], e_cell[1], e_cell[0]};
@@ -93,17 +92,17 @@ module portal_ctrl
     reg [2:0]  state;
     reg [9:0]  tries;
     reg [3:0]  scan_x, scan_y;
-    reg [2:0]  wr_i;            // portal being written (0..4, 3 bits so it can go past 3)
+    reg [2:0]  wr_i;            //portal being written, 3 bits so it can hit 4
 
-    //cell (x, y) being checked this cycle
+    //cell being checked
     wire [3:0] cx = (state == S_SCAN) ? scan_x : rnd[3:0];
     wire [3:0] cy = (state == S_SCAN) ? scan_y : rnd[7:4];
 
-    //cell type at (x, y); anything outside the map counts as wall
+ 
     function [1:0] type_at (input [199:0] c, input [4:0] x, input [4:0] y);
         reg [6:0] i;
         begin
-            i = {y[3:0], 3'b000} + {y[3:0], 1'b0} + x[3:0];   // y*10 + x
+            i = {y[3:0], 3'b000} + {y[3:0], 1'b0} + x[3:0];   //y*10 + x
             if (x > 5'd9 || y > 5'd9) type_at = T_WALL;
             else                      type_at = c[{i, 1'b0} +: 2];
         end
@@ -113,13 +112,12 @@ module portal_ctrl
         is_open = (t == T_FLOOR) || (t == T_CAPSULE);
     endfunction
 
-    //|a - b| for 4 bit coordinates
+    //|a - b|
     function [3:0] absdiff (input [3:0] a, input [3:0] b);
         absdiff = (a > b) ? (a - b) : (b - a);
     endfunction
 
-    //x and y from a cell index 0..99 without a divider
-    //y = (i * 205) >> 11 = i / 10 for 0..99
+    //get x y from cell index without dividing
     function [3:0] idx_y (input [6:0] i);
         reg [14:0] t;
         begin
@@ -131,15 +129,14 @@ module portal_ctrl
         reg [3:0] y;
         begin
             y     = idx_y(i);
-            idx_x = i - ({y, 3'b000} + {y, 1'b0});   // i - y*10
+            idx_x = i - ({y, 3'b000} + {y, 1'b0});
         end
     endfunction
 
     wire [3:0] hx = idx_x(hider_cell),  hy = idx_y(hider_cell);
     wire [3:0] sx = idx_x(seeker_cell), sy = idx_y(seeker_cell);
 
-    //neighbours in the order E, S, W, N
-    //off the edge wraps to 31 -> read as wall
+    //neighbours, E S W N
     wire [4:0] xe = {1'b0, cx} + 5'd1, xw = {1'b0, cx} - 5'd1;
     wire [4:0] ys = {1'b0, cy} + 5'd1, yn = {1'b0, cy} - 5'd1;
     wire open_e = is_open(type_at(cells, xe, {1'b0, cy}));
@@ -148,14 +145,14 @@ module portal_ctrl
     wire open_n = is_open(type_at(cells, {1'b0, cx}, yn));
     wire [2:0] n_open = open_e + open_s + open_w + open_n;
 
-    //shape of the wall being checked
-    wire one_side = (n_open == 3'd1);                              // wall at a dead end
-    wire thru_ew  = open_e && open_w && !open_n && !open_s;        // corridor | wall | corridor
+    //what kind of wall is it
+    wire one_side = (n_open == 3'd1);                              //dead end wall
+    wire thru_ew  = open_e && open_w && !open_n && !open_s;        //corridor | wall | corridor
     wire thru_ns  = open_n && open_s && !open_e && !open_w;
     wire through  = (ALLOW_THROUGH != 0) && (thru_ew || thru_ns);
     wire side     = rnd[8];        
-    // through portal: 1 = exit E (or S), 0 = exit W (or N)
-    // same on both boards (seeded)
+    //for through portals, 1 = exit E (or S), 0 = exit W (or N)
+    //seeded so both boards pick the same
     
     reg  [3:0] ex, ey, ox, oy;
     reg  [7:0] edir;
@@ -187,15 +184,14 @@ module portal_ctrl
     wire is_corner = (cx == 4'd0 || cx == 4'd9) && (cy == 4'd0 || cy == 4'd9);
     wire is_wall   = (type_at(cells, {1'b0, cx}, {1'b0, cy}) == T_WALL);
 
-    //Manhattan distance (|dx| + |dy|) from the exit to each spawn (max 18)
     wire [4:0] d_hider  = absdiff(ex, hx) + absdiff(ey, hy);
     wire [4:0] d_seeker = absdiff(ex, sx) + absdiff(ey, sy);
     wire far_from_spawns = (e_idx != hider_cell) && (e_idx != seeker_cell) &&
                            (d_hider  >= MIN_SPAWN_DIST) && (d_seeker >= MIN_SPAWN_DIST);
 
-    //reject if it overlaps a portal already found
-    function clash (input [6:0] pc, input [6:0] ec, input [6:0] oc,     // a portal already found
-                    input [6:0] c,  input [6:0] e,  input [6:0] o);     // the one being checked
+    //no if it overlaps a portal we already have
+    function clash (input [6:0] pc, input [6:0] ec, input [6:0] oc,     //one we already have
+                    input [6:0] c,  input [6:0] e,  input [6:0] o);     //the new one
         clash = (pc == c) || (ec == e) || (ec == o) || (oc == e) || (oc == o);
     endfunction
     wire used0 = (n_found > 3'd0) && clash(p_cell[0], e_cell[0], o_cell[0], c_idx, e_idx, o_idx);
@@ -203,7 +199,7 @@ module portal_ctrl
     wire used2 = (n_found > 3'd2) && clash(p_cell[2], e_cell[2], o_cell[2], c_idx, e_idx, o_idx);
     wire not_used = !(used0 || used1 || used2);
 
-    //2nd portal of a pair must be far from its partner
+    //2nd portal in a pair can't be too close to the 1st
     wire [2:0] partner = n_found - 3'd1;
     wire [1:0] pt      = partner[1:0];
     wire [4:0] d_ee = absdiff(ex, e_x[pt]) + absdiff(ey, e_y[pt]);
@@ -215,20 +211,19 @@ module portal_ctrl
     wire good = in_map && !is_corner && is_wall && (one_side || through) &&
                 far_from_spawns && not_used && pair_ok;
 
-    //teleport: which portal did we walk into?
+    //which portal did we walk into
     wire [6:0] b_idx = {bump_cy, 3'b000} + {bump_cy, 1'b0} + bump_cx;
     wire hit0 = pair_valid[0] && (b_idx == p_cell[0]);
     wire hit1 = pair_valid[0] && (b_idx == p_cell[1]);
     wire hit2 = pair_valid[1] && (b_idx == p_cell[2]);
     wire hit3 = pair_valid[1] && (b_idx == p_cell[3]);
-    //partner of i is i ^ 1 (0<->1, 2<->3)
     wire [1:0] dest = hit0 ? 2'd1 : hit1 ? 2'd0 : hit2 ? 2'd3 : 2'd2;
 
-    reg [24:0] cooldown;        // down counter; 0 = teleport allowed
+    reg [24:0] cooldown;        //counts down, 0 = can teleport
 
     integer k;
 
-    //main FSM 
+    //main fsm
     always @(posedge clk) begin
         if (reset) begin
             state         <= S_IDLE;
@@ -253,7 +248,7 @@ module portal_ctrl
                 o_x[k]    <= 4'd0;  o_y[k]    <= 4'd0;  o_cell[k] <= 7'd0;
             end
         end else if (start) begin
-            //new match: forget the old portals (map_gen is rewriting the cells)
+            //new match, drop the old portals
             state         <= S_IDLE;
             rnd_step      <= 1'b0;
             portal_we     <= 1'b0;
@@ -262,10 +257,10 @@ module portal_ctrl
             tp_load       <= 1'b0;
             cooldown      <= 25'd0;
         end else begin
-            tp_load  <= 1'b0;                       // default 0, so it's a 1 cycle pulse
+            tp_load  <= 1'b0;                
             rnd_step <= 1'b0;
 
-            //cooldown counts down in every state, but not while paused
+            //cooldown ticks in every state, except when paused
             if (cooldown != 25'd0 && !game_paused)
                 cooldown <= cooldown - 25'd1;
 
@@ -274,17 +269,16 @@ module portal_ctrl
                     if (map_done) begin
                         n_found  <= 3'd0;
                         tries    <= 10'd0;
-                        rnd_step <= 1'b1;           // skip the raw seed
+                        rnd_step <= 1'b1;           //skip the raw seed
                         state    <= S_RANDOM;
                     end
                 end
 
-                //1 random cell per try
-                //LFSR steps every 2nd cycle, only check on new values
+                //one random cell per try
                 S_RANDOM: begin
                     rnd_step <= ~rnd_step;
                     tries    <= tries + 10'd1;
-                    if (good && rnd_step == 1'b0) begin   // only on a new random value
+                    if (good && rnd_step == 1'b0) begin   //fresh value only
                         p_cell[n_found[1:0]] <= c_idx;
                         e_cell[n_found[1:0]] <= e_idx;
                         e_x[n_found[1:0]]    <= ex;
@@ -294,7 +288,7 @@ module portal_ctrl
                         o_y[n_found[1:0]]    <= oy;
                         o_cell[n_found[1:0]] <= o_idx;
                         n_found              <= n_found + 3'd1;
-                        if (n_found == LAST) begin       // that was the last one we need
+                        if (n_found == LAST) begin       //got the last one
                             wr_i  <= 3'd0;
                             state <= S_WRITE;
                         end
@@ -305,7 +299,7 @@ module portal_ctrl
                     end
                 end
 
-                //check every cell in order (pair distance rule relaxed)
+                //go through every cell, pair distance doesn't matter here
                 S_SCAN: begin
                     if (good) begin
                         p_cell[n_found[1:0]] <= c_idx;
@@ -329,9 +323,9 @@ module portal_ctrl
                     end
                 end
 
-                //write portals 0..(2*pairs-1) into world_top, 1 at a time
+                //write portals into world_top one by one
                 S_WRITE: begin
-                    //only keep full pairs: 4 found -> 2 pairs, 2 or 3 -> 1
+                    //full pairs only, 4 found = 2 pairs, 2 or 3 = 1 pair
                     
                     if (!portal_we) begin
                         if (wr_i < {n_found[2:1], 1'b0}) begin
@@ -343,19 +337,19 @@ module portal_ctrl
                             state         <= S_READY;
                         end
                     end else if (portal_wgrant) begin
-                        portal_we <= 1'b0;          // written on this edge, go to next
+                        portal_we <= 1'b0;          //written on this edge, next one
                         wr_i      <= wr_i + 3'd1;
                     end
                 end
 
-                //teleports
+                //teleporting
                 S_READY: begin
                     if (bump && cooldown == 25'd0 && !game_paused &&
                         (hit0 || hit1 || hit2 || hit3)) begin
                         tp_load  <= 1'b1;
-                        tp_x     <= {4'b0000, e_x[dest], 8'h80};   // centre = (c << 8) + 128
+                        tp_x     <= {4'b0000, e_x[dest], 8'h80};   //centre = (c << 8) + 128
                         tp_y     <= {4'b0000, e_y[dest], 8'h80};
-                        tp_dir   <= e_dir[dest];                   // facing away from that portal
+                        tp_dir   <= e_dir[dest];                   //face away from the portal
                         cooldown <= COOLDOWN;
                     end
                 end
