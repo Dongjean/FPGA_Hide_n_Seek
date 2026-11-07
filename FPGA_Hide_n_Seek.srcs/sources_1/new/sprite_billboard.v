@@ -3,7 +3,7 @@
 // spr_obj: 0 hunter, 1 armchair, 2 candelabra, 3 phonograph
 // Frames per object: S, SE, E, NE, N, NW, W, SW, palette index 0 = transparent
 // Frames 32..47: hunter walk A then walk B, same direction order
-// Frames 48..63: held-item layer for the hunter (energy blast, then detector) per direction,
+// Frames 48..63: held-item layer for the hunter (48..55 empty, the shotgun is in his frames; then detector) per direction,
 // 64..65: hider layer (snowflake, flashbang), drawn over the frame with palettes 4 and 5
 // Hunter walks while it is moving, hiders float up and down
 // SINGLE_VIEW = 1: one floating frame for every direction (time capsule)

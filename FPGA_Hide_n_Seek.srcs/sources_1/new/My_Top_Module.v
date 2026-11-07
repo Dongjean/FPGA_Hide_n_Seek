@@ -171,9 +171,8 @@ module My_Top_Module (
     wire               has_uses;
     wire               used_item;
 
-    // Held item, shown to the other player: 0 empty, 1 gun ready, 2 item ready
-    wire [1:0]my_hand = !in_game ? 2'd0 :
-                        weapon_sel[0] ? (has_uses ? 2'd2 : 2'd0) : (has_ammo ? 2'd1 : 2'd0);
+    // Held item, shown to the other player: 0 none (not in a match), 1 gun, 2 item (what sw0 picks)
+    wire [1:0]my_hand = !in_game ? 2'd0 : (weapon_sel[0] ? 2'd2 : 2'd1);
     wire [1:0]op_hand;
  
     world_top #(.LOOP_WALLS(3)) world (
@@ -576,7 +575,7 @@ module My_Top_Module (
         .pixel_data  (view_pixel)
     );
 
-    // First-person held item over the 3D view (the crosshair is drawn on top)
+    // First-person held item and frozen border over the 3D view (the crosshair is drawn on top)
     wire        hand_hit;
     wire [15:0] hand_colour;
     hand_overlay hand (
@@ -587,8 +586,10 @@ module My_Top_Module (
         .item_sel    (weapon_sel[0]),
         .has_ammo    (has_ammo),
         .has_use     (has_uses),
+        .try_fire    (shoot && in_game && can_move),
         .fired_gun   (fired_gun),
         .used_item   (used_item),
+        .frozen      (player_state == 2'd1),     // stunned by the Freeze Gun
         .hit         (hand_hit),
         .colour      (hand_colour)
     );

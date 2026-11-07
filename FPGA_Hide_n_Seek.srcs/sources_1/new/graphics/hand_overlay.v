@@ -1,8 +1,10 @@
 `timescale 1ns / 1ps
-// First-person held item drawn over the 3D view
-// Hunter: energy blast (gun) or hider detector (item), empty hand when that one is used up
-// Hider: freeze blast (gun) or flashbang (item), nothing when that one is used up
-// A counted shot or use turns the overlay's own pixels white for 1/8 s
+// First-person held item drawn over the 3D view, always the one sw0 picks
+// Hunter: shotgun (gun) or hider detector (item).  Hider: freeze blast (gun) or flashbang (item)
+// Shotgun shot: muzzle flash overlay for 1/10 s
+// Other counted shot or use: the overlay's own pixels turn white for 1/8 s
+// Press with nothing left: the overlay is tinted red, on/off twice
+// Frozen: ice-blue border around the screen
 module hand_overlay #(
     parameter integer CLK_HZ = 6_250_000
 )(
@@ -13,55 +15,86 @@ module hand_overlay #(
     input         item_sel,      // weapon_sel[0]: 0 gun, 1 item
     input         has_ammo,
     input         has_use,
+    input         try_fire,      // 1-cycle: fire pressed while I can act
     input         fired_gun,     // 1-cycle
     input         used_item,     // 1-cycle
+    input         frozen,
     output        hit,
     output [15:0] colour
 );
 
-    // Overlays: 1 flashbang, 2 freeze blast, 3 energy blast, 4 hider detector, 5 empty hand
-    // Stored as the 48x36 bottom-right window (x 48..95, y 28..63) of the 96x64 screen
+    // Overlays: 1 flashbang, 2 freeze blast, 3 shotgun, 4 hider detector, 5 muzzle flash
+    // Stored as the 48x38 bottom-right window (x 48..95, y 26..63) of the 96x64 screen
     localparam [2:0] O_NONE = 3'd0, O_FLASH = 3'd1, O_FREEZE = 3'd2,
-                     O_BLAST = 3'd3, O_DETECT = 3'd4, O_EMPTY = 3'd5;
-    localparam integer FLASH_CLKS = CLK_HZ / 8;
+                     O_GUN = 3'd3, O_DETECT = 3'd4, O_MUZZLE = 3'd5;
+    localparam [19:0] WHITE_CLKS  = CLK_HZ / 8;
+    localparam [19:0] MUZZLE_CLKS = CLK_HZ / 10;
+    localparam [19:0] BLINK_CLKS  = CLK_HZ / 12;
 
     wire [2:0] current = !in_game ? O_NONE :
-                         is_hider ? (item_sel ? (has_use  ? O_FLASH  : O_NONE)
-                                              : (has_ammo ? O_FREEZE : O_NONE))
-                                  : (item_sel ? (has_use  ? O_DETECT : O_EMPTY)
-                                              : (has_ammo ? O_BLAST  : O_EMPTY));
+                         is_hider ? (item_sel ? O_FLASH  : O_FREEZE)
+                                  : (item_sel ? O_DETECT : O_GUN);
+    wire empty_try = try_fire && (item_sel ? !has_use : !has_ammo);
+    wire gun_shot  = fired_gun && !is_hider;
 
-    // Keep showing the item that was used while it flashes, even if that emptied it
-    reg [31:0] flash_count = 32'd0;
-    reg [2:0]  flash_ovl   = O_NONE;
+    // White flash
+    reg [19:0] white_count = 20'd0;
     always @(posedge clk) begin
-        if (fired_gun || used_item) begin
-            flash_count <= FLASH_CLKS;
-            flash_ovl   <= current;
-        end else if (flash_count != 32'd0) begin
-            flash_count <= flash_count - 32'd1;
+        if (gun_shot || empty_try)
+            white_count <= 20'd0;
+        else if (fired_gun || used_item)
+            white_count <= WHITE_CLKS;
+        else if (white_count != 20'd0)
+            white_count <= white_count - 20'd1;
+    end
+
+    // Muzzle flash
+    reg [19:0] muzzle_count = 20'd0;
+    always @(posedge clk) begin
+        if (gun_shot)
+            muzzle_count <= MUZZLE_CLKS;
+        else if (muzzle_count != 20'd0)
+            muzzle_count <= muzzle_count - 20'd1;
+    end
+
+    // Red tint: 4 phases (on, off, on, off)
+    reg [19:0] blink_count = 20'd0;
+    reg [2:0]  blink_phase = 3'd0;      // phases left
+    always @(posedge clk) begin
+        if (empty_try) begin
+            blink_count <= BLINK_CLKS;
+            blink_phase <= 3'd4;
+        end else if (blink_phase != 3'd0) begin
+            if (blink_count == 20'd0) begin
+                blink_count <= BLINK_CLKS;
+                blink_phase <= blink_phase - 3'd1;
+            end else begin
+                blink_count <= blink_count - 20'd1;
+            end
         end
     end
-    wire       flashing = (flash_count != 32'd0) && in_game;
-    wire [2:0] shown    = flashing ? flash_ovl : current;
+
+    wire white = (white_count != 20'd0) && in_game;
+    wire red   = blink_phase[0] == 1'b0 && blink_phase != 3'd0 && in_game;   // phases 4 and 2
+    wire [2:0] shown = (muzzle_count != 20'd0 && current == O_GUN) ? O_MUZZLE : current;
 
     wire [5:0]  pixel_y = pixel_index / 13'd96;
     wire [12:0] y_x96   = ({7'd0, pixel_y} << 6) + ({7'd0, pixel_y} << 5);
     wire [6:0]  pixel_x = pixel_index - y_x96;
 
-    wire       in_window = (pixel_x >= 7'd48) && (pixel_y >= 6'd28);
+    wire       in_window = (pixel_x >= 7'd48) && (pixel_y >= 6'd26);
     wire [6:0] wx7 = pixel_x - 7'd48;
     wire [5:0] wx  = wx7[5:0];
-    wire [5:0] wy  = pixel_y - 6'd28;
+    wire [5:0] wy  = pixel_y - 6'd26;
     wire [2:0] ovl_idx = shown - 3'd1;
 
-    // overlay * 1728 + wy * 48 + wx
+    // overlay * 1824 + wy * 48 + wx
     wire [13:0] ovl_base = ({11'd0, ovl_idx} << 10) + ({11'd0, ovl_idx} << 9) +
-                           ({11'd0, ovl_idx} << 7)  + ({11'd0, ovl_idx} << 6);
+                           ({11'd0, ovl_idx} << 8)  + ({11'd0, ovl_idx} << 5);
     wire [13:0] row_base = ({8'd0, wy} << 5) + ({8'd0, wy} << 4);
     wire [13:0] addr     = (in_window && shown != O_NONE) ? (ovl_base + row_base + {8'd0, wx}) : 14'd0;
 
-    (* rom_style = "block" *) reg [3:0] overlay_texel [0:8639];   // 5 overlays * 48 * 36
+    (* rom_style = "block" *) reg [3:0] overlay_texel [0:9119];   // 5 overlays * 48 * 38
     reg [15:0] overlay_palette [0:79];                            // 16 colours per overlay
     initial begin
         $readmemh("overlay_idx.mem", overlay_texel);
@@ -72,7 +105,21 @@ module hand_overlay #(
     always @(posedge clk)
         texel <= overlay_texel[addr];
 
-    assign hit    = in_window && (shown != O_NONE) && (texel != 4'd0);
-    assign colour = flashing ? 16'hFFFF : overlay_palette[{ovl_idx, texel}];
+    // Ice border: solid outer ring, dotted ring inside it
+    wire edge0 = (pixel_x == 7'd0) || (pixel_x == 7'd95) || (pixel_y == 6'd0) || (pixel_y == 6'd63);
+    wire edge1 = (((pixel_x == 7'd1) || (pixel_x == 7'd94)) && (pixel_y >= 6'd1) && (pixel_y <= 6'd62)) ||
+                 (((pixel_y == 6'd1) || (pixel_y == 6'd62)) && (pixel_x >= 7'd1) && (pixel_x <= 7'd94));
+    wire frost = frozen && in_game && (edge0 || (edge1 && (pixel_x[0] == pixel_y[0])));
+    localparam [15:0] ICE       = 16'h6E5F;    // (110, 200, 255)
+    localparam [15:0] ICE_LIGHT = 16'hCF9F;    // (200, 240, 255)
+
+    wire        item_hit = in_window && (shown != O_NONE) && (texel != 4'd0);
+    wire [15:0] drawn    = overlay_palette[{ovl_idx, texel}];
+    wire [15:0] tinted   = {1'b0, drawn[15:12], 1'b0, drawn[10:6], 1'b0, drawn[4:1]} + 16'h7800;   // half drawn + half red
+
+    assign hit    = frost || item_hit;
+    assign colour = frost ? (edge0 ? ICE : ICE_LIGHT) :
+                    white ? 16'hFFFF :
+                    red   ? tinted : drawn;
 
 endmodule
