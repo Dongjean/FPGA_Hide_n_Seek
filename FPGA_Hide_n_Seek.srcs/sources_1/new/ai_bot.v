@@ -283,6 +283,27 @@ module ai_bot
 
     reg [15:0]move_step;
     reg signed [15:0]diff;
+    reg signed [15:0]next_x, next_y;
+    
+    // The bot may not get closer than 0.25 cell (16'd64) to the player
+    // Same as player movement
+    localparam [15:0] MIN_SEP = 16'd64;
+
+    function opp_blocks (input signed [15:0]nx, input signed [15:0]ny,
+                         input signed [15:0]cx, input signed [15:0]cy,
+                         input signed [15:0]ox, input signed [15:0]oy);
+        reg signed [15:0]ndx, ndy, odx, ody;
+        reg [15:0]nd, od;
+        begin
+            ndx = nx - ox;  if (ndx < 0) ndx = -ndx;
+            ndy = ny - oy;  if (ndy < 0) ndy = -ndy;
+            odx = cx - ox;  if (odx < 0) odx = -odx;
+            ody = cy - oy;  if (ody < 0) ody = -ody;
+            nd = (ndx > ndy) ? ndx : ndy;
+            od = (odx > ody) ? odx : ody;
+            opp_blocks = (nd < MIN_SEP) && (nd < od);
+        end
+    endfunction
     reg [3:0]src_x, src_y;
 
     always @(posedge clk) begin
@@ -542,12 +563,16 @@ module ai_bot
                         move_step = {8'd0, speed};
                         if (bot_x != way_x) begin
                             diff = way_x - bot_x;
-                            if (diff > 0) bot_x <= (diff > move_step) ? bot_x + move_step : way_x;
-                            else          bot_x <= (-diff > move_step) ? bot_x - move_step : way_x;
+                            if (diff > 0) next_x = (diff > move_step) ? bot_x + move_step : way_x;
+                            else          next_x = (-diff > move_step) ? bot_x - move_step : way_x;
+                            if (!opp_blocks(next_x, bot_y, bot_x, bot_y, player_x, player_y))
+                                bot_x <= next_x;             // else wait for the player to move
                         end else if (bot_y != way_y) begin
                             diff = way_y - bot_y;
-                            if (diff > 0) bot_y <= (diff > move_step) ? bot_y + move_step : way_y;
-                            else          bot_y <= (-diff > move_step) ? bot_y - move_step : way_y;
+                            if (diff > 0) next_y = (diff > move_step) ? bot_y + move_step : way_y;
+                            else          next_y = (-diff > move_step) ? bot_y - move_step : way_y;
+                            if (!opp_blocks(bot_x, next_y, bot_x, bot_y, player_x, player_y))
+                                bot_y <= next_y;
                         end
                     end
                     if (can_see_player && bot_role == ROLE_SEEKER)
