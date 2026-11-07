@@ -42,10 +42,10 @@ module player_movement
     reg [15:0]new_x;
     reg [15:0]new_y;
     
-    // Players may not get closer than 0.25 cell (16'd64) to each other.
+    // Players may not get closer than 0.125 cell (16'd32) to each other.
     // A move is refused only if it ends inside that gap AND brings the players closer, so
     // two players who already overlap (portal landing, link lag) can always walk apart.
-    localparam [15:0] MIN_SEP = 16'd64;
+    localparam [15:0] MIN_SEP = 16'd32;
 
     function opp_blocks (input signed [15:0]nx, input signed [15:0]ny,
                          input signed [15:0]cx, input signed [15:0]cy,

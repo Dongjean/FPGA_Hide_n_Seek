@@ -285,9 +285,9 @@ module ai_bot
     reg signed [15:0]diff;
     reg signed [15:0]next_x, next_y;
     
-    // The bot may not get closer than 0.25 cell (16'd64) to the player
+    // The bot may not get closer than 0.125 cell (16'd32) to the player
     // Same as player movement
-    localparam [15:0] MIN_SEP = 16'd64;
+    localparam [15:0] MIN_SEP = 16'd32;
 
     function opp_blocks (input signed [15:0]nx, input signed [15:0]ny,
                          input signed [15:0]cx, input signed [15:0]cy,
