@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
-// Shows a 16-bit value as 4 hex digits on the Basys3 7-segment display.
+
+//Seven-segment display
+//Shows a 16-bit value as 4 hex digits, lighting one digit at a time.
 module seven_segment_display
 #(
     parameter integer CLK_HZ = 100_000_000
@@ -11,14 +13,18 @@ module seven_segment_display
     output dp,
     output reg [3:0]an = 4'hF
 );
-    localparam integer REFRESH_CLKS = CLK_HZ / 4000;   // each digit lit for 0.25 ms
+
+    //Timing and registers
+    localparam integer REFRESH_CLKS = CLK_HZ / 4000;
 
     reg [31:0]refresh_count = 32'd0;
     reg [1:0]digit = 2'd0;
     reg [3:0]nibble;
 
-    assign dp = 1'b1;   // decimal point off (active low)
+    assign dp = 1'b1;
 
+    //Digit select
+    //Picks the 4 bits of value for the digit being lit.
     always @(*) begin
         case (digit)
             2'd0: nibble = value[3:0];
@@ -28,6 +34,7 @@ module seven_segment_display
         endcase
     end
 
+    //Digit refresh and segment patterns
     always @(posedge clk) begin
         if (refresh_count == REFRESH_CLKS - 1) begin
             refresh_count <= 32'd0;
@@ -36,8 +43,8 @@ module seven_segment_display
             refresh_count <= refresh_count + 32'd1;
         end
 
-        an <= ~(4'b0001 << digit);   // active low, digit 0 is the rightmost
-        case (nibble)                // segments gfedcba, active low
+        an <= ~(4'b0001 << digit);
+        case (nibble)
             4'h0: seg <= 7'b1000000;
             4'h1: seg <= 7'b1111001;
             4'h2: seg <= 7'b0100100;

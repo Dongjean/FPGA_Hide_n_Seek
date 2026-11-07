@@ -1,23 +1,7 @@
 `timescale 1ns / 1ps
-// Hardware breadth-first search over the grid map.
-//
-// Pulse start with a source cell. The engine fills a distance table: for every
-// open cell, the number of steps to reach it from the source moving up, down,
-// left or right around walls. Walls and unreachable cells read as 255.
-//
-// A bot uses it in two ways:
-//   chase: search from the target; step to the neighbouring cell with a SMALLER
-//          distance and you follow the shortest path to the target.
-//   flee:  search from the threat; step to a neighbour with a LARGER distance.
-//
-// How it works: a queue holds cells waiting to be explored. Each cell taken from
-// the front looks at its 4 neighbours, one per clock; any open neighbour not yet
-// reached gets distance + 1 and joins the back of the queue. Each cell enters the
-// queue at most once, so a 10x10 map finishes in about 600 clocks (0.1 ms).
-//
-// Map format matches the team's map_is_wall(): cell (x, y) is wall when
-// map_bits[MAP_W*MAP_H - 1 - (y*MAP_W + x)] is 1.
 
+//BFS pathfinder
+//Fills a table with the number of steps from a source cell to every open cell (255 = unreachable).
 module bfs_pathfinder
 #(
     parameter integer MAP_W = 10,
@@ -32,12 +16,14 @@ module bfs_pathfinder
     input [3:0]src_x,
     input [3:0]src_y,
     output busy,
-    output reg done = 1'b0,          // pulse when the table is complete
+    output reg done = 1'b0,
 
     input [3:0]query_x,
     input [3:0]query_y,
-    output [7:0]query_dist           // 255 = wall, outside the map, or unreachable
+    output [7:0]query_dist
 );
+
+    //Constants and states
     localparam integer CELLS = MAP_W * MAP_H;
     localparam [7:0]FAR = 8'd255;
 
@@ -46,22 +32,22 @@ module bfs_pathfinder
     localparam [1:0]S_POP   = 2'd2;
     localparam [1:0]S_NEIGH = 2'd3;
 
+    //Distance table, queue and registers
     reg [7:0]distance [0:CELLS-1];
-    reg [7:0]queue [0:CELLS-1];          // {y, x}
+    reg [7:0]queue [0:CELLS-1];
     reg [7:0]q_head;
     reg [7:0]q_tail;
 
     reg [1:0]state = S_IDLE;
     reg [7:0]clear_index;
-    reg [3:0]sx, sy;                     // source cell
-    reg [3:0]cx, cy;                     // cell being explored
-    reg [7:0]cd;                         // its distance
-    reg [1:0]neighbour;                  // 0 up, 1 right, 2 down, 3 left
+    reg [3:0]sx, sy;
+    reg [3:0]cx, cy;
+    reg [7:0]cd;
+    reg [1:0]neighbour;
 
     assign busy = (state != S_IDLE);
 
-    // The map is passed in as an argument (not read directly) so that a combinational
-    // assign using this function is re-evaluated when the map changes.
+    //Wall lookup
     function is_wall(input [CELLS-1:0]map, input [3:0]x, input [3:0]y);
         begin
             if (x >= MAP_W || y >= MAP_H)
@@ -71,7 +57,8 @@ module bfs_pathfinder
         end
     endfunction
 
-    // Current neighbour
+    //Neighbour of the current cell
+    //0 up, 1 right, 2 down, 3 left; n_new is high for an open cell not reached yet.
     reg [3:0]nx, ny;
     reg n_inside;
     always @(*) begin
@@ -86,11 +73,13 @@ module bfs_pathfinder
     wire [7:0]n_index = ny * MAP_W + nx;
     wire n_new = n_inside && !is_wall(map_bits, nx, ny) && (distance[n_index] == FAR);
 
-    // Read port for the bot
+    //Read port for the bot
     wire query_inside = (query_x < MAP_W) && (query_y < MAP_H);
     wire [7:0]query_index = query_y * MAP_W + query_x;
     assign query_dist = query_inside ? distance[query_index] : FAR;
 
+    //Search FSM
+    //IDLE -> CLEAR (all cells unreached) -> POP (take a cell from the queue) <-> NEIGH (check 4 neighbours).
     always @(posedge clk) begin
         done <= 1'b0;
 
@@ -107,7 +96,6 @@ module bfs_pathfinder
                     end
                 end
 
-                // Mark every cell unreached, then put the source in the queue
                 S_CLEAR: begin
                     distance[clear_index] <= FAR;
                     if (clear_index == CELLS - 1) begin
@@ -116,7 +104,7 @@ module bfs_pathfinder
                             queue[0] <= {sy, sx};
                             q_tail   <= 8'd1;
                         end else begin
-                            q_tail   <= 8'd0;     // source is a wall: nothing reachable
+                            q_tail   <= 8'd0;
                         end
                         q_head <= 8'd0;
                         state  <= S_POP;
@@ -125,7 +113,6 @@ module bfs_pathfinder
                     end
                 end
 
-                // Take the next cell from the front of the queue
                 S_POP: begin
                     if (q_head == q_tail) begin
                         done  <= 1'b1;
@@ -139,7 +126,6 @@ module bfs_pathfinder
                     end
                 end
 
-                // One neighbour per clock
                 S_NEIGH: begin
                     if (n_new) begin
                         distance[n_index]  <= cd + 8'd1;

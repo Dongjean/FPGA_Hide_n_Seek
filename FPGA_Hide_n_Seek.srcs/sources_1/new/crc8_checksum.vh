@@ -1,7 +1,5 @@
-// CRC-8 with polynomial x^8 + x^2 + x + 1 (0x07), initial value 0x00.
-// Processes one byte per call; all 8 bit steps are unrolled into one clock.
-// Any single-bit error and any burst error up to 8 bits long is always detected.
-
+//CRC-8 checksum
+//Polynomial 0x07, one byte per call. Used to check packets on the link.
 function [7:0]crc8_update(input [7:0]crc, input [7:0]data);
     integer i;
     reg [7:0]c;

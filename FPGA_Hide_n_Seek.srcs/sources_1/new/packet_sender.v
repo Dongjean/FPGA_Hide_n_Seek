@@ -1,11 +1,7 @@
 `timescale 1ns / 1ps
-// Sends one packet over UART:
-//
-//   | 0xA5 | TYPE | SEQ | LEN | PAYLOAD (LEN bytes) | CRC-8 |
-//
-// The CRC covers TYPE, SEQ, LEN and the payload. Payload byte k is
-// pkt_payload[8*k +: 8]. Pulse send for one clock while busy is low.
 
+//Packet sender
+//Sends | A5 | TYPE | SEQ | LEN | PAYLOAD | CRC-8 | through the UART.
 module packet_sender
 #(
     parameter integer CLK_HZ  = 100_000_000,
@@ -24,23 +20,27 @@ module packet_sender
     output busy,
     output tx
 );
+
+    //Constants and states
     `include "crc8_checksum.vh"
 
     localparam [7:0]SYNC_BYTE = 8'hA5;
 
     localparam [1:0]S_IDLE    = 2'd0;
-    localparam [1:0]S_LOAD    = 2'd1;   // hand the next byte to the UART
-    localparam [1:0]S_WAIT_HI = 2'd2;   // wait for the UART to accept it
-    localparam [1:0]S_WAIT_LO = 2'd3;   // wait for the UART to finish it
+    localparam [1:0]S_LOAD    = 2'd1;
+    localparam [1:0]S_WAIT_HI = 2'd2;
+    localparam [1:0]S_WAIT_LO = 2'd3;
 
+    //Packet registers
     reg [1:0]state = S_IDLE;
     reg [7:0]type_r;
     reg [7:0]seq_r;
     reg [7:0]len_r;
     reg [8*MAX_LEN-1:0]payload_r;
-    reg [7:0]byte_index;   // 0 = sync, 1 = type, 2 = seq, 3 = len, then payload, then CRC
+    reg [7:0]byte_index;
     reg [7:0]crc;
 
+    //UART
     reg uart_start = 1'b0;
     reg [7:0]uart_data;
     wire uart_busy;
@@ -54,9 +54,10 @@ module packet_sender
         .busy    (uart_busy)
     );
 
+    //Current byte
+    //Chooses the sync, header, payload or CRC byte for the current position.
     assign busy = (state != S_IDLE);
 
-    // The byte that belongs at the current position in the packet
     wire [7:0]payload_index = byte_index - 8'd4;
     wire is_crc_byte = (byte_index == len_r + 8'd4);
     reg [7:0]current_byte;
@@ -70,6 +71,8 @@ module packet_sender
         endcase
     end
 
+    //Send FSM
+    //IDLE latches the packet, then LOAD -> WAIT_HI -> WAIT_LO for every byte.
     always @(posedge clk) begin
         uart_start <= 1'b0;
 
@@ -92,7 +95,6 @@ module packet_sender
                 S_LOAD: begin
                     uart_data  <= current_byte;
                     uart_start <= 1'b1;
-                    // Every byte except the sync byte and the CRC itself goes into the CRC
                     if (byte_index != 8'd0 && !is_crc_byte)
                         crc <= crc8_update(crc, current_byte);
                     state <= S_WAIT_HI;
@@ -106,7 +108,7 @@ module packet_sender
                 S_WAIT_LO: begin
                     if (!uart_busy) begin
                         if (is_crc_byte) begin
-                            state <= S_IDLE;   // whole packet sent
+                            state <= S_IDLE;
                         end else begin
                             byte_index <= byte_index + 8'd1;
                             state <= S_LOAD;
