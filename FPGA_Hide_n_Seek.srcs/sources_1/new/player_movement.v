@@ -38,13 +38,20 @@ module player_movement
     `include "trig_LUT.vh"
     `include "wall_helpers.vh"
     
+    // 3/4 = 75% speed
+    localparam signed [15:0] SPEED_NUM = 16'sd3;
+    localparam signed [15:0] SPEED_DEN = 16'sd4;
+    function signed [15:0]scale_step (input signed [7:0]v);
+        scale_step = (v * SPEED_NUM) / SPEED_DEN;
+    endfunction
+    
     reg [1:0]move_phase;
     reg [15:0]new_x;
     reg [15:0]new_y;
     
     // Players may not get closer than 0.125 cell (16'd32) to each other.
-    // A move is refused only if it ends inside that gap AND brings the players closer, so
-    // two players who already overlap (portal landing, link lag) can always walk apart.
+    // A move is refused only if it ends inside that gap AND brings the players closer
+    // So two players who already overlap (portal landing, link lag) can always walk apart.
     localparam [15:0] MIN_SEP = 16'd32;
 
     function opp_blocks (input signed [15:0]nx, input signed [15:0]ny,
@@ -65,7 +72,7 @@ module player_movement
     
     function [31:0]move_player (input signed [15:0]x, signed [15:0]y, [7:0]dir);
         begin
-            move_player = {x + sin_lut(dir), y - cos_lut(dir)};
+            move_player = {x + scale_step(sin_lut(dir)), y - scale_step(cos_lut(dir))};
         end
     endfunction
 
