@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-// Which open cells hold a ceiling lamp, same bit order as map_bits
+// Lamp cells, same bit order as map_bits
 module ceiling_light_map (
     input  [99:0] map_bits,     // 1 = wall
     output [99:0] light_bits    // 1 = lamp on this cell

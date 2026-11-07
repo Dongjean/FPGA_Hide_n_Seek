@@ -31,9 +31,13 @@ module game_timer #(
     localparam integer BLINK_CLKS   = (CLK_HZ / 8    < 1) ? 1 : CLK_HZ / 8;
     localparam integer REFRESH_CLKS = (CLK_HZ / 1000 < 1) ? 1 : CLK_HZ / 1000;
 
-    reg [31:0] cs_count = 32'd0;
-    reg [31:0] blink_count = 32'd0;
-    reg [31:0] refresh_count = 32'd0;
+    localparam integer CS_W      = $clog2(CS_CLKS + 1);
+    localparam integer BLINK_W   = $clog2(BLINK_CLKS + 1);
+    localparam integer REFRESH_W = $clog2(REFRESH_CLKS + 1);
+
+    reg [CS_W-1:0]      cs_count = 0;
+    reg [BLINK_W-1:0]   blink_count = 0;
+    reg [REFRESH_W-1:0] refresh_count = 0;
     reg        blink_on = 1'b1;
     reg [1:0]  digit_sel = 2'd0;
 
@@ -41,30 +45,30 @@ module game_timer #(
 
     always @(posedge clk) begin
         if (reset || start) begin
-            cs_count <= 32'd0;
+            cs_count <= 0;
         end else if (run && !time_up) begin
-            cs_count <= cs_tick ? 32'd0 : cs_count + 32'd1;
+            cs_count <= cs_tick ? 0 : cs_count + 1'b1;
         end
 
         if (blink_count == BLINK_CLKS - 1) begin
-            blink_count <= 32'd0;
+            blink_count <= 0;
             blink_on    <= ~blink_on;
         end else begin
-            blink_count <= blink_count + 32'd1;
+            blink_count <= blink_count + 1'b1;
         end
 
         if (refresh_count == REFRESH_CLKS - 1) begin
-            refresh_count <= 32'd0;
+            refresh_count <= 0;
             digit_sel     <= digit_sel + 2'd1;
         end else begin
-            refresh_count <= refresh_count + 32'd1;
+            refresh_count <= refresh_count + 1'b1;
         end
     end
 
     wire at_one_cs = (min_digit == 4'd0) && (sec_tens == 3'd0) && (sec_ones == 4'd0) &&
                      (cs_tens == 4'd0) && (cs_ones == 4'd1);
 
-    // Countdown, digits borrow like a clock
+    // countdown
     always @(posedge clk) begin
         if (reset || start) begin
             min_digit <= ROUND_MINUTES;
@@ -75,7 +79,6 @@ module game_timer #(
             time_up   <= 1'b0;
         end else if (!time_up) begin
             if (penalty) begin
-                // The penalty is PEN_TENS on the tens digit
                 if (min_digit == 4'd0 &&
                     (sec_tens < PEN_TENS || (sec_tens == PEN_TENS && sec_ones == 4'd0 && cs_tens == 4'd0 && cs_ones == 4'd0))) begin
                     sec_tens <= 3'd0; sec_ones <= 4'd0; cs_tens <= 4'd0; cs_ones <= 4'd0;
@@ -115,7 +118,7 @@ module game_timer #(
         end
     end
 
-    // Whole seconds left, plus one while a fraction remains
+    // seconds left, rounded up
     wire [8:0] min_x60 = ({5'b00000, min_digit} << 6) - ({5'b00000, min_digit} << 2);
     wire [8:0] sec_x10 = ({6'b000000, sec_tens} << 3) + ({6'b000000, sec_tens} << 1);
     wire       frac    = (cs_tens != 4'd0) || (cs_ones != 4'd0);
@@ -125,7 +128,7 @@ module game_timer #(
     always @(posedge clk) time_up_d <= time_up;
     assign time_up_pulse = time_up && !time_up_d;
 
-    // 7-seg: M.SS above a minute, SS.cc below, an[3] is the leftmost digit
+    // 7-seg: M.SS, SS.cc under a minute
     wire final_ten  = (min_digit == 4'd0) && (sec_tens == 3'd0) && !time_up;
     assign flash_off = final_ten && !blink_on;
     wire minute_mode = (min_digit != 4'd0);

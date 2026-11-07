@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-// Textured floor and ceiling with ceiling lamps
+// Floor and ceiling with lamps
 module floor_ceiling_caster (
     input signed [15:0] player_x,    // Q8.8
     input signed [15:0] player_y,
@@ -27,17 +27,16 @@ module floor_ceiling_caster (
 
     wire is_floor = pixel_y[5];
 
-    // Rows from the horizon, same units as the wall half height
+    // rows from the horizon
     wire [5:0] half_height = is_floor ? (pixel_y - 6'd31) : (6'd32 - pixel_y);
     wire [6:0] steps       = floor_dist_steps(half_height);
 
-    // Ray through this column
     wire [7:0] ray_dir = view_dir + ray_angle_offset(pixel_x);
     wire signed [7:0] sin_r = sin_lut(ray_dir);
     wire signed [7:0] cos_r = cos_lut(ray_dir);
     wire signed [7:0] steps_signed = {1'b0, steps};
 
-    // sin/cos are x64 and a step is 1/1024 cell, so (sin * steps) >> 2 is Q8.8
+    // sin/cos x64, step = 1/1024 cell, result Q8.8
     wire signed [15:0] prod_x = sin_r * steps_signed;
     wire signed [15:0] prod_y = cos_r * steps_signed;
     wire signed [15:0] world_x = player_x + (prod_x >>> 2);

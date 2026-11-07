@@ -3,7 +3,7 @@
 // spr_obj: 0 hunter, 1 armchair, 2 candelabra, 3 phonograph
 // Frames per object: S, SE, E, NE, N, NW, W, SW, palette index 0 = transparent
 // Frames 32..47: hunter walk A then walk B, same direction order
-// Frames 48..63: held-item layer for the hunter (energy blast, then detector) per direction,
+// Frames 48..63: held-item layer for the hunter in his right hand (shotgun, then detector) per direction,
 // 64..65: hider layer (snowflake, flashbang), drawn over the frame with palettes 4 and 5
 // Hunter walks while it is moving, hiders float up and down
 // SINGLE_VIEW = 1: one floating frame for every direction (time capsule)
@@ -103,9 +103,13 @@ module sprite_billboard #(
     localparam integer STEP_CLKS   = CLK_HZ / 4;        // one step per walk frame
     localparam integer BOB_CLKS    = CLK_HZ * 3 / 40;   // 32 steps = 2.4 s float period
 
-    reg [31:0]        sample_count = 32'd0;
-    reg [31:0]        step_count   = 32'd0;
-    reg [31:0]        bob_count    = 32'd0;
+    localparam integer SAMPLE_W = $clog2(SAMPLE_CLKS + 1);
+    localparam integer STEP_W   = $clog2(STEP_CLKS + 1);
+    localparam integer BOB_W    = $clog2(BOB_CLKS + 1);
+
+    reg [SAMPLE_W-1:0] sample_count = 0;
+    reg [STEP_W-1:0]   step_count   = 0;
+    reg [BOB_W-1:0]    bob_count    = 0;
     reg signed [15:0] last_x = 16'sd0;
     reg signed [15:0] last_y = 16'sd0;
     reg [2:0]         move_hold = 3'd0;
@@ -116,7 +120,7 @@ module sprite_billboard #(
 
     always @(posedge clk) begin
         if (sample_count == SAMPLE_CLKS - 1) begin
-            sample_count <= 32'd0;
+            sample_count <= 0;
             last_x <= spr_x;
             last_y <= spr_y;
             if ((spr_x != last_x) || (spr_y != last_y))
@@ -124,24 +128,24 @@ module sprite_billboard #(
             else if (move_hold != 3'd0)
                 move_hold <= move_hold - 3'd1;
         end else begin
-            sample_count <= sample_count + 32'd1;
+            sample_count <= sample_count + 1'b1;
         end
 
         if (!moving) begin
-            step_count <= 32'd0;
+            step_count <= 0;
             walk_phase <= 1'b0;
         end else if (step_count == STEP_CLKS - 1) begin
-            step_count <= 32'd0;
+            step_count <= 0;
             walk_phase <= ~walk_phase;
         end else begin
-            step_count <= step_count + 32'd1;
+            step_count <= step_count + 1'b1;
         end
 
         if (bob_count == BOB_CLKS - 1) begin
-            bob_count <= 32'd0;
+            bob_count <= 0;
             bob_step  <= bob_step + 5'd1;
         end else begin
-            bob_count <= bob_count + 32'd1;
+            bob_count <= bob_count + 1'b1;
         end
     end
 
